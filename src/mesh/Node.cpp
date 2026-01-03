@@ -872,30 +872,70 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             }
 
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::START_GENERATE_LOAD) {
-                GenerateLoadTriggerMessage const * message = (GenerateLoadTriggerMessage const *)packet->data;
-                generateLoadTarget = message->target;
-                generateLoadPayloadSize = message->size;
-                //generateLoadMessagesLeft = message->amount;//packet->requestHandle new
-                generateLoadMessagesLeft = message->amount*packet->requestHandle;//packet->requestHandle new
-                generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
-                //generateLoadRequestHandle = packet->requestHandle;
-                generateLoadRequestHandle = 0; //new
-                //u32 packetReceivedTime = GS->timeManager.GetUtcTime();  // new nonimportant
-                GS->CollsndCount=0; //new init CollsndCount
-                GS->MultipleCount=0;
-                GS->MultipleUnit=packet->requestHandle; //new
-                logt("NODE", "Generating load. Target: %u size: %u amount: %u interval: %u requestHandle: %u",
-                    message->target,
-                    message->size,
-                    message->amount*packet->requestHandle, //packet->requestHandle new
-                    message->timeBetweenMessagesDs,
-                    packet->requestHandle);
+                // 检查消息大小来判断是否包含 priority 字段
+                const u8 payloadLength = sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE;
+                
+                trace("DEBUG: Received START_GENERATE_LOAD, payloadLength=%u, sizeof(GenerateLoadWithPriorityMessage)=%u, sizeof(GenerateLoadTriggerMessage)=%u" EOL, 
+                    payloadLength, sizeof(GenerateLoadWithPriorityMessage), sizeof(GenerateLoadTriggerMessage));
+                
+                if (payloadLength >= sizeof(GenerateLoadWithPriorityMessage)) {
+                    // 包含 priority 的新格式
+                    trace("DEBUG: Using NEW format (with priority)" EOL);
+                    GenerateLoadWithPriorityMessage const * message = (GenerateLoadWithPriorityMessage const *)packet->data;
+                    generateLoadTarget = message->target;
+                    generateLoadPayloadSize = message->size;
+                    generateLoadMessagesLeft = message->amount * packet->requestHandle;
+                    generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
+                    generateLoadPriority = message->priority; // 保存 priority
+                    generateLoadWithPriorityFlag = true; // 设置标志
+                    generateLoadRequestHandle = 0;
+                    
+                    GS->CollsndCount = 0;
+                    GS->MultipleCount = 0;
+                    GS->MultipleUnit = packet->requestHandle;
+                    
+                    trace("DEBUG: gen_load_prio - MultipleUnit=%u, amount=%u, requestHandle=%u, priority=%u" EOL, 
+                        GS->MultipleUnit, message->amount, packet->requestHandle, message->priority);
+                    
+                    logt("NODE", "Generating load with priority. Target: %u size: %u amount: %u interval: %u priority: %u requestHandle: %u",
+                        message->target,
+                        message->size,
+                        message->amount * packet->requestHandle,
+                        message->timeBetweenMessagesDs,
+                        message->priority,
+                        packet->requestHandle);
+                } else {
+                    // 原始格式，没有 priority
+                    trace("DEBUG: Using OLD format (without priority)" EOL);
+                    GenerateLoadTriggerMessage const * message = (GenerateLoadTriggerMessage const *)packet->data;
+                    generateLoadTarget = message->target;
+                    generateLoadPayloadSize = message->size;
+                    generateLoadMessagesLeft = message->amount * packet->requestHandle;
+                    generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
+                    generateLoadPriority = 3; // Default to LOW priority
+                    generateLoadWithPriorityFlag = false; // 清除标志
+                    generateLoadRequestHandle = 0;
+                    
+                    GS->CollsndCount = 0;
+                    GS->MultipleCount = 0;
+                    GS->MultipleUnit = packet->requestHandle;
+                    
+                    trace("DEBUG: multi_generate_load - MultipleUnit=%u, amount=%u, requestHandle=%u" EOL, 
+                        GS->MultipleUnit, message->amount, packet->requestHandle);
+                    
+                    logt("NODE", "Generating load. Target: %u size: %u amount: %u interval: %u requestHandle: %u",
+                        message->target,
+                        message->size,
+                        message->amount * packet->requestHandle,
+                        message->timeBetweenMessagesDs,
+                        packet->requestHandle);
+                }
 
                 SendModuleActionMessage(
                     MessageType::MODULE_ACTION_RESPONSE,
                     packetHeader->sender,
                     (u8)NodeModuleActionResponseMessages::START_GENERATE_LOAD_RESULT,
-                    0, // update packet->requestHandle
+                    0,
                     nullptr,
                     0,
                     false
@@ -906,13 +946,27 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 u8 const * payload = packet->data;
                 bool payloadCorrect = true;
                 const u8 payloadLength = sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE;
-                for (u32 i = 0; i < payloadLength; i++)
+                
+                // 新增：检测 priority 标记
+                u8 receivedPriority = 3; // 默认 LOW
+                bool hasPriorityMarker = false;
+                u32 startIdx = 0;
+                
+                if (payloadLength > 0 && (payload[0] & 0xF0) == generateLoadPriorityMarker) {
+                    hasPriorityMarker = true;
+                    receivedPriority = payload[0] & 0x0F;
+                    startIdx = 1;
+                }
+                
+                // 验证 payload
+                for (u32 i = startIdx; i < payloadLength; i++)
                 {
                     if (payload[i] != generateLoadMagicNumber)
                     {
                         payloadCorrect = false;
                     }
                 }
+                
                 //new: calculate packet delay nonimportant
                 u32 packetReceivedTime = GS->delaytimer;
                 u32 packetDelay = 0;
@@ -923,6 +977,17 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
 
                 avgDelay[packetHeader->sender - 1] += packetDelay;
                 rcvCount[packetHeader->sender - 1] += 1;
+                
+                // 新增：分别统计 high/low priority
+                if (hasPriorityMarker) {
+                    if (receivedPriority <= 1) { // HIGH or VITAL
+                        avgDelayHighPrio[packetHeader->sender - 1] += packetDelay;
+                        rcvCountHighPrio[packetHeader->sender - 1] += 1;
+                    } else { // MEDIUM or LOW
+                        avgDelayLowPrio[packetHeader->sender - 1] += packetDelay;
+                        rcvCountLowPrio[packetHeader->sender - 1] += 1;
+                    }
+                }
 
 
                 for (u32 i = 0; i < payloadLength; i++)
@@ -2091,6 +2156,19 @@ DeliveryPriority Node::GetPriorityOfMessage(const u8* data, MessageLength size)
             || header->messageType == MessageType::DATA_1_VITAL)
         {
             return DeliveryPriority::VITAL;
+        }
+        
+        // 檢查是否為 GENERATE_LOAD_CHUNK 消息，如果是則使用設定的 priority
+        if (header->messageType == MessageType::MODULE_TRIGGER_ACTION && size >= SIZEOF_CONN_PACKET_MODULE)
+        {
+            const ConnPacketModule* packet = (const ConnPacketModule*)data;
+            if (packet->moduleId == ModuleId::NODE 
+                && packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK)
+            {
+                // 根據 generateLoadPriority 返回對應的 DeliveryPriority
+                // 0: VITAL, 1: HIGH, 2: MEDIUM, 3: LOW
+                return (DeliveryPriority)generateLoadPriority;
+            }
         }
     }
     return DeliveryPriority::INVALID;
@@ -3350,6 +3428,10 @@ void Node::TimerEventHandler(u16 passedTimeDs)
             DYNAMIC_ARRAY(payloadBuffer, generateLoadPayloadSize);
             CheckedMemset(payloadBuffer, generateLoadMagicNumber, generateLoadPayloadSize);
 
+            // 新增：只有当使用 gen_load_prio 命令时才标记 priority
+            if (generateLoadWithPriorityFlag && generateLoadPayloadSize > 0) {
+                payloadBuffer[0] = generateLoadPriorityMarker | (generateLoadPriority & 0x0F);
+            }
 
             //new
             // if(GS->MultipleUnit!=0){
@@ -4107,6 +4189,59 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 
+            // 新增命令：支持指定優先級的多節點負載生成
+            if (commandArgsSize > 7 && TERMARGS(3, "gen_load_prio"))
+            {
+                // 0:action, 1:this, 2:node, 3:cmd, 4:size, 5:amt, 6:interval, 7:priority, 8:handle(opt)
+
+                GenerateLoadWithPriorityMessage gltm;
+                CheckedMemset(&gltm, 0, sizeof(GenerateLoadWithPriorityMessage));
+
+                // 1. 基本參數設定
+                gltm.target = destinationNode;
+                gltm.size = Utility::StringToU8(commandArgs[4]);
+                gltm.amount = Utility::StringToU16(commandArgs[5]);
+                gltm.timeBetweenMessagesDs = Utility::StringToU8(commandArgs[6]);
+
+                // 2. 讀取優先級參數
+                // 假設輸入 1 代表 High Priority，0 代表 Low Priority
+                u8 priorityVal = Utility::StringToU8(commandArgs[7]);
+                gltm.priority = priorityVal;
+
+                // 3. 處理 Handle (因為多插了一個參數，所以 Handle 變成第 9 個參數，index 8)
+                const u8 requestHandle = commandArgsSize > 8 ? Utility::StringToU8(commandArgs[8]) : 1;
+                
+                // 4. 統計設定
+                GS->MultipleUnit = requestHandle;
+                GS->sndCount = gltm.amount * (TOTAL_NODE_NUM - 1) * requestHandle;
+                GS->rcvCount = 0;
+                
+                // 重置接收端統計陣列
+                for (int i = 0; i < TOTAL_NODE_NUM; i++) {
+                    MultipleCount[i] = 0;
+                    CollsndCount[i] = 0;
+                    avgDelay[i] = 0;
+                    rcvCount[i] = 0;
+                }
+
+                // 5. 發送命令給所有節點
+                for (int j = 1; j <= TOTAL_NODE_NUM; j++)
+                {
+                    if (j != destinationNode) {
+                        SendModuleActionMessage(
+                            MessageType::MODULE_TRIGGER_ACTION,
+                            j,
+                            (u8)NodeModuleTriggerActionMessages::START_GENERATE_LOAD,
+                            requestHandle,
+                            (u8*)&gltm,
+                            sizeof(gltm),
+                            false
+                        );
+                    }
+                }
+                return TerminalCommandHandlerReturnType::SUCCESS;
+            }
+
             //new command: coll sndCount
             if (commandArgsSize >3 && TERMARGS(3, "snd"))
             {   GS->CollsndCount=0;
@@ -4128,6 +4263,51 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 }
                 return TerminalCommandHandlerReturnType::SUCCESS;                
             }
+            
+            //新增命令: 收集 priority 分开的统计数据
+            if (commandArgsSize > 3 && TERMARGS(3, "snd_prio"))
+            {
+                GS->CollsndCount = 0;
+                GS->MultipleCount = 0;
+                
+                // **不重置 priority 统计** - 让数据继续累积
+                // priority 统计数据在接收 GENERATE_LOAD_CHUNK 时自动记录
+                
+                // 发送收集命令给所有节点
+                for (int j = 1; j <= TOTAL_NODE_NUM; j++) 
+                {
+                    if (j != destinationNode) {
+                        SendModuleActionMessage(
+                            MessageType::MODULE_TRIGGER_ACTION,
+                            j,
+                            (u8)NodeModuleTriggerActionMessages::COLLECT_TRANSMIT_DATA,
+                            0,
+                            nullptr,
+                            0,
+                            false
+                        );
+                    }
+                }
+                
+                trace("Priority statistics collection command sent (data preserved)" EOL);
+                return TerminalCommandHandlerReturnType::SUCCESS;
+            }
+            
+            //新增命令: 重置 priority 统计数据
+            if (commandArgsSize > 3 && TERMARGS(3, "reset_prio"))
+            {
+                // 重置所有 priority 统计
+                for (int i = 0; i < TOTAL_NODE_NUM; i++) {
+                    avgDelayHighPrio[i] = 0;
+                    avgDelayLowPrio[i] = 0;
+                    rcvCountHighPrio[i] = 0;
+                    rcvCountLowPrio[i] = 0;
+                }
+                
+                trace("Priority statistics reset" EOL);
+                return TerminalCommandHandlerReturnType::SUCCESS;
+            }
+            
             //new command: avg delay result
             if (commandArgsSize > 3 && TERMARGS(3, "result"))
             {                
@@ -4163,6 +4343,56 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                         avgDelay[i] = 0;
                         rcvCount[i] = 0;
                 }
+                return TerminalCommandHandlerReturnType::SUCCESS;
+            }
+
+            //新增命令: 显示 priority 分开的统计结果
+            if (commandArgsSize > 3 && TERMARGS(3, "result_prio"))
+            {
+                trace("\\n========== Priority Statistics ==========" EOL);
+                
+                u32 avgHigh = 0, avgLow = 0;
+                u32 totalHighCount = 0, totalLowCount = 0;
+                
+                for (int i = 0; i < TOTAL_NODE_NUM; i++)
+                {
+                    if ((i+1) != destinationNode) {
+                        u32 tempHigh = 0, tempLow = 0;
+                        
+                        if (rcvCountHighPrio[i] > 0) {
+                            tempHigh = avgDelayHighPrio[i] / rcvCountHighPrio[i];
+                            avgHigh += tempHigh;
+                            totalHighCount += rcvCountHighPrio[i];
+                        }
+                        
+                        if (rcvCountLowPrio[i] > 0) {
+                            tempLow = avgDelayLowPrio[i] / rcvCountLowPrio[i];
+                            avgLow += tempLow;
+                            totalLowCount += rcvCountLowPrio[i];
+                        }
+                        
+                        trace("Node %d: HIGH=%u ms (n=%u), LOW=%u ms (n=%u)" EOL, 
+                            i + 1, tempHigh, rcvCountHighPrio[i], tempLow, rcvCountLowPrio[i]);
+                    }
+                }
+                
+                u32 activeNodes = TOTAL_NODE_NUM - 1;
+                if (activeNodes > 0) {
+                    trace("\\nOverall: HIGH=%u ms (total=%u), LOW=%u ms (total=%u)" EOL,
+                        totalHighCount > 0 ? avgHigh / activeNodes : 0, totalHighCount,
+                        totalLowCount > 0 ? avgLow / activeNodes : 0, totalLowCount);
+                    
+                    if (totalHighCount > 0 && totalLowCount > 0) {
+                        u32 avgHighDelay = avgHigh / activeNodes;
+                        u32 avgLowDelay = avgLow / activeNodes;
+                        if (avgHighDelay < avgLowDelay) {
+                            u32 improvement = ((avgLowDelay - avgHighDelay) * 100) / avgLowDelay;
+                            trace("HIGH priority is %u%% faster" EOL, improvement);
+                        }
+                    }
+                }
+                trace("=========================================" EOL);
+                
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 

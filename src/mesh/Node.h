@@ -292,6 +292,17 @@ private:
             u8 timeBetweenMessagesDs;
         };
 #pragma pack(pop)
+
+#pragma pack(push)
+#pragma pack(1)
+        struct GenerateLoadWithPriorityMessage{
+            NodeId target;
+            u8 size;
+            u8 amount;
+            u8 timeBetweenMessagesDs;
+            u8 priority; // 0: Low Priority, 1: High Priority
+        };
+#pragma pack(pop)
         //State for straggered connection interval updates
         u16 connUpdateIntervalMs = 0;
         i8 connUpdateIndex = -1;
@@ -302,8 +313,17 @@ private:
         u8 generateLoadTimeSinceLastMessageDs = 0;
         u8 generateLoadPayloadSize = 0;
         u8 generateLoadRequestHandle = 0;
+        u8 generateLoadPriority = 3; // Default to LOW priority (DeliveryPriority::LOW = 3)
+        bool generateLoadWithPriorityFlag = false; // 标记是否使用 gen_load_prio 命令
         constexpr static u8 generateLoadMagicNumber = 0x91;
+        constexpr static u8 generateLoadPriorityMarker = 0xF0; // 标记 priority 包
         NodeId generateLoadTarget = 0;
+
+        // 新增：分别统计 high priority 和 low priority
+        u32 avgDelayHighPrio[100] = {0}; 
+        u32 avgDelayLowPrio[100] = {0};
+        u32 rcvCountHighPrio[100] = {0};
+        u32 rcvCountLowPrio[100] = {0};
 
         u32 emergencyDisconnectTimerDs = 0; //The time since this node was not involved in any mesh. Can be reset by other means as well, e.g. when an emergency disconnect was sent.
         constexpr static u32 emergencyDisconnectTimerTriggerDs = SEC_TO_DS(/*Two minutes*/ 2 * 60);
