@@ -977,6 +977,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
 
                 avgDelay[packetHeader->sender - 1] += packetDelay;
                 rcvCount[packetHeader->sender - 1] += 1;
+                GS->rcvCount += 1; // 累加全局接收计数
                 
                 // 新增：分别统计 high/low priority
                 if (hasPriorityMarker) {
