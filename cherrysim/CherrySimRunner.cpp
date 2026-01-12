@@ -292,9 +292,9 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
     SimConfiguration simConfig;
 
     simConfig.seed = 1;
-    simConfig.mapWidthInMeters = 5;
-    simConfig.mapHeightInMeters = 5;
-    simConfig.mapElevationInMeters = 1;
+    simConfig.mapWidthInMeters = 10;
+    simConfig.mapHeightInMeters = 10;
+    simConfig.mapElevationInMeters = 0;
     simConfig.simTickDurationMs = 1;
 
     simConfig.terminalId = 1; //Enter -1 to disable, 0 for all nodes, or a specific id
@@ -303,7 +303,7 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
     simConfig.nodeConfigName.insert({ "prod_sink_nrf52", 1});//set Sink node,only one sink node is allowed
     simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 2});//set Dev node, can be multiple nodes
 
-    simConfig.simOtherDelay = 10; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly //1
+    simConfig.simOtherDelay = 1; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly //1
     simConfig.playDelay = 0; //Allows us to view the simulation slower than simulated, is added after each step
 
     simConfig.interruptProbability = 0;
@@ -320,7 +320,7 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 
     simConfig.defaultNetworkId = 10;
 
-    simConfig.rssiNoise = true;
+    simConfig.rssiNoise = false;
 
     simConfig.verboseCommands = true;
     simConfig.enableSimStatistics = true;
