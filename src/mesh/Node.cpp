@@ -948,7 +948,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPayloadSize = message->size;
                     generateLoadMessagesLeft = message->amount * packet->requestHandle;
                     generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
-                    generateLoadPriority = 3; // Default to LOW priority
+                    generateLoadPriority = 2; // Default to LOW priority
                     generateLoadWithPriorityFlag = false; // 清除标志
                     generateLoadMixedMode = false; // 清除混合模式
                     generateLoadRequestHandle = 0;
@@ -1137,7 +1137,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 3;
+                TOTAL_NODE_NUM = 6;
 
                     /*初始化deg記憶體空間==-1*/
                 if (init == -1) {
@@ -2697,25 +2697,25 @@ joinMeBufferPacket* Node::DetermineBestClusterAsMaster()
 //Connect to big clusters but big clusters must connect nodes that are not able 
 u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 {
-    switch (configuration.nodeId){
-    case 1:
-        if (packet.payload.sender != 2) return 0;
-        break;
-    case 2:
-        if (packet.payload.sender != 3) return 0;
-        break;
-    case 3:
-        if (1) return 0;
-        break;  
+    // switch (configuration.nodeId){
+    // case 1:
+    //     if (packet.payload.sender != 2) return 0;
+    //     break;
+    // case 2:
+    //     if (packet.payload.sender != 3) return 0;
+    //     break;
+    // case 3:
+    //     if (1) return 0;
+    //     break;  
     // case 4:
     //     if (packet.payload.sender != 5) return 0;
     //     break;
     // case 5:
     //     if (1) return 0;
     //     break;    
-    default:
-       break;
-    }
+    // default:
+    //    break;
+    // }
 
 
     //if(1) return 0;
@@ -4539,6 +4539,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 //  0     1    2      3
                 //action this node result
                 u32 avg = 0;
+                GS->rcvCount = 0;
                 for (int i = 0; i < TOTAL_NODE_NUM; i++)
                 {
                     if ((i+1) != destinationNode) { //new
@@ -4551,6 +4552,8 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                             temp = avgDelay[i] / rcvCount[i];
                         trace("Avg delay of node %d = %u ms , send count = %u , rcv count = %d " EOL, i + 1, temp, sendcount, rcvCount[i]);
                         avg += temp;
+
+                        GS->rcvCount += rcvCount[i];
                     }
                 }
 
