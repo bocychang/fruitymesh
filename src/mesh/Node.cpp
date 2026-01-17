@@ -78,11 +78,11 @@ int testdis=0;
 //new: avg delay
 u8 TOTAL_NODE_NUM = -1;//nnber 注意 17
 
-u32 MultipleCount[16];
-u32 CollsndCount[16];
-u32 avgDelay[16];
+u32 MultipleCount[100];
+u32 CollsndCount[100];
+u32 avgDelay[100];
 u32 meshHopCount[50];
-int rcvCount[16];
+int rcvCount[100];
 
 int ssettime=-1; // ssettime 開關
 int adjust=-1; //調整誤差 開關
@@ -948,7 +948,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPayloadSize = message->size;
                     generateLoadMessagesLeft = message->amount * packet->requestHandle;
                     generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
-                    generateLoadPriority = 2; // Default to LOW priority
+                    generateLoadPriority = 1; // Default to LOW priority
                     generateLoadWithPriorityFlag = false; // 清除标志
                     generateLoadMixedMode = false; // 清除混合模式
                     generateLoadRequestHandle = 0;
@@ -1012,18 +1012,21 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 else
                     packetDelay = packet->timestamp - packetReceivedTime;
 
-                avgDelay[packetHeader->sender - 1] += packetDelay;
-                rcvCount[packetHeader->sender - 1] += 1;
-                GS->rcvCount += 1; // 累加全局接收计数
-                
-                // 新增：分别统计 high/low priority
-                if (hasPriorityMarker) {
-                    if (receivedPriority <= 1) { // HIGH or VITAL
-                        avgDelayHighPrio[packetHeader->sender - 1] += packetDelay;
-                        rcvCountHighPrio[packetHeader->sender - 1] += 1;
-                    } else { // MEDIUM or LOW
-                        avgDelayLowPrio[packetHeader->sender - 1] += packetDelay;
-                        rcvCountLowPrio[packetHeader->sender - 1] += 1;
+                // 边界检查：防止数组越界
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+                    avgDelay[packetHeader->sender - 1] += packetDelay;
+                    rcvCount[packetHeader->sender - 1] += 1;
+                    GS->rcvCount += 1; // 累加全局接收计数
+                    
+                    // 新增：分别统计 high/low priority
+                    if (hasPriorityMarker) {
+                        if (receivedPriority <= 1) { // HIGH or VITAL
+                            avgDelayHighPrio[packetHeader->sender - 1] += packetDelay;
+                            rcvCountHighPrio[packetHeader->sender - 1] += 1;
+                        } else { // MEDIUM or LOW
+                            avgDelayLowPrio[packetHeader->sender - 1] += packetDelay;
+                            rcvCountLowPrio[packetHeader->sender - 1] += 1;
+                        }
                     }
                 }
 
@@ -1120,14 +1123,18 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             else if(packet->actionType == (u8)NodeModuleTriggerActionMessages::TRANSMIT_DATA_CollsndCount)
             {
                 GS->CollsndCount+=(u32)packet->requestHandle;
-                CollsndCount[packetHeader->sender-1]+=(u32)packet->requestHandle;
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+                    CollsndCount[packetHeader->sender-1]+=(u32)packet->requestHandle;
+                }
             }
             //new collect data
             else if(packet->actionType == (u8)NodeModuleTriggerActionMessages::TRANSMIT_DATA_MultipleCount)
             {
                  GenerateLoadTriggerMessage const * message = (GenerateLoadTriggerMessage const *)packet->data; //new
                 GS->MultipleCount+=(u32)packet->requestHandle;
-                MultipleCount[packetHeader->sender-1]+=(u32)packet->requestHandle;
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+                    MultipleCount[packetHeader->sender-1]+=(u32)packet->requestHandle;
+                }
                 trace("GS->MultipleCount %u" EOL, GS->MultipleCount);
                
 
@@ -1137,13 +1144,18 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 6;
+                TOTAL_NODE_NUM = 17;
+                
+                // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
+                if (TOTAL_NODE_NUM > 100) {
+                    trace("ERROR: TOTAL_NODE_NUM=%u exceeds maximum 100, clamping to 100" EOL, TOTAL_NODE_NUM);
+                    TOTAL_NODE_NUM = 100;
+                }
 
                     /*初始化deg記憶體空間==-1*/
                 if (init == -1) {
-
-
-                    for (int i = 0; i <= TOTAL_NODE_NUM; i++) {
+                    // 初始化整个 deg 数组，确保所有可能的节点 ID 都被初始化
+                    for (int i = 0; i < 100; i++) {
                         deg[i] = -1;
                     }
 
@@ -1151,27 +1163,35 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                  }
 
                     /*設置deg*/
-                deg[packetHeader->sender]= ((u32)packet->requestHandle);
-                trace("Node: %d  deg: %d\n" EOL, packetHeader->sender, deg[packetHeader->sender]);//test
-                if (packetHeader->receiver != root) {
-                    deg[packetHeader->receiver] = ((u32)packet->requestHandle) + 1;
-                    GS->node.parent = packetHeader->sender;
+                // 边界检查：确保 sender 和 receiver 在有效范围内
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+                    deg[packetHeader->sender - 1]= ((u32)packet->requestHandle);
+                    trace("Node: %d  deg: %d\n" EOL, packetHeader->sender, deg[packetHeader->sender - 1]);//test
                 }
-                else GS->node.parent = 255; // 如顯示255;
+                
+                if (packetHeader->receiver > 0 && packetHeader->receiver <= 100) {
+                    if (packetHeader->receiver != root) {
+                        deg[packetHeader->receiver - 1] = ((u32)packet->requestHandle) + 1;
+                        GS->node.parent = packetHeader->sender;
+                    }
+                    else GS->node.parent = 255; // 如顯示255;
 
-                trace("Node: %d  deg: %d\n" EOL, packetHeader->receiver, deg[packetHeader->receiver]);
+                    trace("Node: %d  deg: %d\n" EOL, packetHeader->receiver, deg[packetHeader->receiver - 1]);
+                }
                 
                  BaseConnections conn = GS->cm.GetBaseConnections(ConnectionDirection::INVALID);
                  for (u8 i = 0; i < conn.count; i++)
                   {
                   if (conn.handles[i]) {
-                    if (GS->node.parent != conn.handles[i].GetPartnerId()) {
-                        deg[conn.handles[i].GetPartnerId()] = deg[packetHeader->receiver] + 1;
+                    NodeId partnerId = conn.handles[i].GetPartnerId();
+                    if (GS->node.parent != partnerId && partnerId > 0 && partnerId <= 100 && 
+                        packetHeader->receiver > 0 && packetHeader->receiver <= 100) {
+                        deg[partnerId - 1] = deg[packetHeader->receiver - 1] + 1;
                        SendModuleActionMessage(
                        MessageType::MODULE_TRIGGER_ACTION, //MessageType messageType
-                       conn.handles[i].GetPartnerId(),     //NodeId toNode
+                       partnerId,     //NodeId toNode
                        (u8)NodeModuleTriggerActionMessages::FIND_DEGREE,                                 //u8 actionType
-                       deg[packetHeader->receiver],                                  //u8 requestHandle 將目前deg的值傳給兒子
+                       deg[packetHeader->receiver - 1],                                  //u8 requestHandle 將目前deg的值傳給兒子
                        nullptr,                            //const u8* additionalData
                        0,                                  //u16 additionalDataSize
                        false                              //bool reliable
@@ -1198,7 +1218,8 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                                 false                              //bool reliable
                             );
                         }
-                        else if (deg[packetHeader->receiver] % 2 != 0) {
+                        else if (packetHeader->receiver > 0 && packetHeader->receiver <= 100 && 
+                                 deg[packetHeader->receiver - 1] % 2 != 0) {
                             trace("禁用\n");//test
                             SendModuleActionMessage(
                                 MessageType::MODULE_TRIGGER_ACTION, //MessageType messageType
@@ -1241,11 +1262,13 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 {
                     if (conn.handles[i]) {
                         if (GS->node.parent != conn.handles[i].GetPartnerId()) {
+                           u8 requestHandle = (packetHeader->receiver > 0 && packetHeader->receiver <= 100) ? 
+                                             deg[packetHeader->receiver - 1] : 0;
                            SendModuleActionMessage(
                         MessageType::MODULE_TRIGGER_ACTION, //MessageType messageType
                         conn.handles[i].GetPartnerId(),     //NodeId toNode
                         (u8)NodeModuleTriggerActionMessages::SET_FLAG,                                 //u8 actionType
-                        deg[packetHeader->receiver],                                  //u8 requestHandle 將目前deg的值傳給兒子
+                        requestHandle,                                  //u8 requestHandle 將目前deg的值傳給兒子
                         nullptr,                            //const u8* additionalData
                         0,                                  //u16 additionalDataSize
                         false                              //bool reliable
@@ -1625,7 +1648,9 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     GS->maxMeshHopCount = packet->requestHandle;
                 }
 
-                meshHopCount[packetHeader->sender - 1] = packet->requestHandle;
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+                    meshHopCount[packetHeader->sender - 1] = packet->requestHandle;
+                }
 
                 if (packetHeader->sender < TOTAL_NODE_NUM){
                     u32 nextNodeId = packetHeader->sender + 1;
@@ -2271,6 +2296,11 @@ void Node::UpdateJoinMePacket()
 {
     if (configuration.networkId == 0) return;
     if (meshAdvJobHandle == nullptr) return;
+    // 额外检查：防止指针被损坏为无效值
+    if ((uintptr_t)meshAdvJobHandle == 0xFFFFFFFF || (uintptr_t)meshAdvJobHandle == 0xFFFFFFFFFFFFFFFF) {
+        logt("ERROR", "meshAdvJobHandle is corrupted: 0x%X", (uintptr_t)meshAdvJobHandle);
+        return;
+    }
     if (GET_DEVICE_TYPE() == DeviceType::ASSET) return;
 
     SetTerminalTitle();
@@ -4269,6 +4299,12 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 GS->maxMeshHopCount = 0;
                 GS->avgMeshHopCount = 0;
                 TOTAL_NODE_NUM = Utility::StringToU8(commandArgs[4]);
+                
+                // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
+                if (TOTAL_NODE_NUM > 100) {
+                    trace("ERROR: TOTAL_NODE_NUM=%u exceeds maximum 100, clamping to 100" EOL, TOTAL_NODE_NUM);
+                    TOTAL_NODE_NUM = 100;
+                }
 
                 for (int i = 0; i < TOTAL_NODE_NUM ; i++){
                     meshHopCount[i] = 0;
@@ -4300,6 +4336,12 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 const u8 requestHandle = commandArgsSize > 8 ? Utility::StringToU8(commandArgs[7]) : 1; // new :0 update :1
                 GS->MultipleUnit=requestHandle; //new
                 GS->sndCount = gltm.amount * (TOTAL_NODE_NUM - 1)*requestHandle;
+                
+                // 调试信息：显示当前配置
+                trace("=== multi_generate_load Debug Info ===" EOL);
+                trace("TOTAL_NODE_NUM=%u, Sink=%u, Size=%u, Amount=%u, Interval=%u, Handle=%u" EOL, 
+                      TOTAL_NODE_NUM, destinationNode, gltm.size, gltm.amount, gltm.timeBetweenMessagesDs, requestHandle);
+                
                 //reset avg delay, PDR count
                 GS->rcvCount = 0;
                 for (int i = 0; i < TOTAL_NODE_NUM ; i++) //  for (int i = 0; i < TOTAL_NODE_NUM - 1; i++)
@@ -4311,9 +4353,11 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 }
 
                 // start generating for 1 sink only
+                trace("Sending commands to nodes: ");
                 for (int j = 1; j <= TOTAL_NODE_NUM; j++) // for (int j = 1; j < TOTAL_NODE_NUM; j++)
                 {
                     if (j != destinationNode) { //new
+                        trace("%u ", j);
                         SendModuleActionMessage(
                             MessageType::MODULE_TRIGGER_ACTION,
                             j,
@@ -4325,6 +4369,10 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                         );
                     }
                 }
+                trace(EOL);
+                trace("Commands sent to %u nodes" EOL, TOTAL_NODE_NUM - 1);
+                trace("====================================" EOL);
+                
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 

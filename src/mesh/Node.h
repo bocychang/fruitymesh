@@ -384,7 +384,7 @@ private:
 
         //new
         NodeId parent;
-        int deg[7]; //需設node數 當前 3+1
+        int deg[100]; //需設 node数 扩大到 100 防止越界
 
         AdvJob* meshAdvJobHandle = nullptr;
 
