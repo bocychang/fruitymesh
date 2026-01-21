@@ -886,31 +886,38 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPayloadSize = message->size;
                     generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
                     
+                    // 解碼 interleavingRatio：高 4 位是 requestHandle，低 4 位是真正的 ratio
+                    u8 decodedMultiplier = (message->interleavingRatio >> 4) & 0x0F;
+                    u8 decodedRatio = message->interleavingRatio & 0x0F;
+                    if (decodedMultiplier == 0) decodedMultiplier = 1; // 防止除以 0
+                    if (decodedRatio == 0) decodedRatio = 3; // 預設 3:1
+                    
                     // 設定混合模式參數
                     generateLoadMixedMode = true;
                     generateLoadWithPriorityFlag = true;
-                    generateLoadHighTarget = message->highAmount;
-                    generateLoadLowTarget = message->lowAmount;
+                    generateLoadHighTarget = message->highAmount * decodedMultiplier;  // 乘以 multiplier
+                    generateLoadLowTarget = message->lowAmount * decodedMultiplier;    // 乘以 multiplier
                     generateLoadHighSent = 0;
                     generateLoadLowSent = 0;
-                    generateLoadInterleavingRatio = message->interleavingRatio > 0 ? message->interleavingRatio : 3;
+                    generateLoadInterleavingRatio = decodedRatio;
                     generateLoadMixedCounter = 0;
-                    generateLoadMessagesLeft = message->highAmount + message->lowAmount;
+                    generateLoadMessagesLeft = (message->highAmount + message->lowAmount) * decodedMultiplier;
                     generateLoadRequestHandle = 0;
                     
                     GS->CollsndCount = 0;
                     GS->MultipleCount = 0;
-                    GS->MultipleUnit = 1;
+                    GS->MultipleUnit = decodedMultiplier;
                     
-                    trace("DEBUG: gen_load_mixed - HIGH=%u, LOW=%u, ratio=%u:1, total=%u" EOL, 
-                        message->highAmount, message->lowAmount, generateLoadInterleavingRatio, generateLoadMessagesLeft);
+                    trace("DEBUG: gen_load_mixed - HIGH=%u, LOW=%u, ratio=%u:1, multiplier=%u, total=%u" EOL, 
+                        message->highAmount, message->lowAmount, decodedRatio, decodedMultiplier, generateLoadMessagesLeft);
                     
-                    logt("NODE", "Generating MIXED interleaved load. Target: %u size: %u HIGH: %u LOW: %u ratio: %u:1 interval: %u",
+                    logt("NODE", "Generating MIXED interleaved load. Target: %u size: %u HIGH: %u LOW: %u ratio: %u:1 multiplier: %u interval: %u",
                         message->target,
                         message->size,
                         message->highAmount,
                         message->lowAmount,
-                        generateLoadInterleavingRatio,
+                        decodedRatio,
+                        decodedMultiplier,
                         message->timeBetweenMessagesDs);
                 }
                 else if (payloadLength >= sizeof(GenerateLoadWithPriorityMessage)) {
@@ -948,7 +955,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPayloadSize = message->size;
                     generateLoadMessagesLeft = message->amount * packet->requestHandle;
                     generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
-                    generateLoadPriority = 1; // Default to LOW priority
+                    generateLoadPriority = 2; // Default to LOW priority
                     generateLoadWithPriorityFlag = false; // 清除标志
                     generateLoadMixedMode = false; // 清除混合模式
                     generateLoadRequestHandle = 0;
@@ -1144,7 +1151,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 17;
+                TOTAL_NODE_NUM = 3;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -4379,9 +4386,9 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
             // 新增命令：gen_load_mixed - 智能交錯傳輸 HIGH 和 LOW priority
             if (commandArgsSize > 7 && TERMARGS(3, "gen_load_mixed"))
             {
-                // 0:action, 1:this, 2:node, 3:cmd, 4:size, 5:highAmt, 6:lowAmt, 7:interval, 8:ratio(opt)
-                // 例如: action 1 node gen_load_mixed 30 150 50 1 3
-                // 每個節點發送 150 HIGH + 50 LOW，交錯比例 3:1（每 4 個封包中 3 個 HIGH）
+                // 0:action, 1:this, 2:node, 3:cmd, 4:size, 5:highAmt, 6:lowAmt, 7:interval, 8:requestHandle(opt), 9:ratio(opt)
+                // 例如: action 1 node gen_load_mixed 30 150 50 1 1 3
+                // 每個節點發送 150 HIGH + 50 LOW，requestHandle=1，交錯比例 3:1（每 4 個封包中 3 個 HIGH）
 
                 GenerateLoadMixedMessage gltm;
                 CheckedMemset(&gltm, 0, sizeof(GenerateLoadMixedMessage));
@@ -4393,13 +4400,21 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 gltm.lowAmount = Utility::StringToU16(commandArgs[6]);
                 gltm.timeBetweenMessagesDs = Utility::StringToU8(commandArgs[7]);
 
-                // 2. 讀取交錯比例（可選參數，預設 3 表示 3:1）
-                gltm.interleavingRatio = commandArgsSize > 8 ? Utility::StringToU8(commandArgs[8]) : 3;
+                // 2. 讀取 requestHandle（可選參數，預設 1）
+                const u8 requestHandle = commandArgsSize > 8 ? Utility::StringToU8(commandArgs[8]) : 1;
+
+                // 3. 讀取交錯比例（可選參數，預設 3 表示 3:1）
+                gltm.interleavingRatio = commandArgsSize > 9 ? Utility::StringToU8(commandArgs[9]) : 3;
                 if (gltm.interleavingRatio == 0) gltm.interleavingRatio = 3;
                 
-                // 3. 統計設定
-                GS->MultipleUnit = 1;
-                GS->sndCount = (gltm.highAmount + gltm.lowAmount) * (TOTAL_NODE_NUM - 1);
+                // 4. 將 requestHandle 編碼到 interleavingRatio 的高 4 位（巧妙利用空間）
+                // interleavingRatio 實際值範圍 0-15，requestHandle 範圍也是 0-15
+                // 使用公式：編碼值 = (requestHandle << 4) | interleavingRatio
+                gltm.interleavingRatio = (requestHandle << 4) | (gltm.interleavingRatio & 0x0F);
+                
+                // 4. 統計設定
+                GS->MultipleUnit = requestHandle;
+                GS->sndCount = (gltm.highAmount + gltm.lowAmount) * (TOTAL_NODE_NUM - 1) * requestHandle;
                 GS->rcvCount = 0;
                 
                 // 重置所有統計陣列
@@ -4416,10 +4431,13 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     sndCountLowPrio[i] = 0;
                 }
 
-                trace("Starting MIXED interleaved load: HIGH=%u, LOW=%u, ratio=%u:1" EOL, 
-                    gltm.highAmount, gltm.lowAmount, gltm.interleavingRatio);
+                // 提取原始的 ratio 用于显示（低 4 位）
+                u8 displayRatio = gltm.interleavingRatio & 0x0F;
+                trace("Starting MIXED interleaved load: HIGH=%u, LOW=%u, ratio=%u:1, multiplier=%u" EOL, 
+                    gltm.highAmount, gltm.lowAmount, displayRatio, requestHandle);
 
-                // 4. 發送命令給所有節點（使用特殊標記 0xFD 表示混合交錯模式）
+                // 5. 發送命令給所有節點
+                // 注意：使用 0xFD 作為特殊標記來識別混合交錯模式，避免與優先級值混淆
                 for (int j = 1; j <= TOTAL_NODE_NUM; j++)
                 {
                     if (j != destinationNode) {
@@ -4427,7 +4445,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                             MessageType::MODULE_TRIGGER_ACTION,
                             j,
                             (u8)NodeModuleTriggerActionMessages::START_GENERATE_LOAD,
-                            0xFD, // 特殊 requestHandle 標記混合交錯模式
+                            0xFD, // 特殊標記：混合交錯模式（避免與 DeliveryPriority 衝突）
                             (u8*)&gltm,
                             sizeof(gltm),
                             false
@@ -4673,10 +4691,10 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     if (totalHighRcv > 0 && totalLowRcv > 0) {
                         if (avgHighDelay < avgLowDelay) {
                             u32 improvement = ((avgLowDelay - avgHighDelay) * 100) / avgLowDelay;
-                            trace("✓ HIGH priority is %u%% faster than LOW" EOL, improvement);
+                            trace("HIGH priority is %u%% faster than LOW" EOL, improvement);
                         }
                         if (highPDR > lowPDR) {
-                            trace("✓ HIGH priority PDR is %u%% better than LOW (%u%% vs %u%%)" EOL, 
+                            trace("HIGH priority PDR is %u%% better than LOW (%u%% vs %u%%)" EOL, 
                                 highPDR - lowPDR, highPDR, lowPDR);
                         }
                         trace("Interleaving algorithm: Weighted Round-Robin with dynamic adjustment" EOL);

@@ -220,7 +220,7 @@ namespace Utility
         );
 
         // cast to an unsigned value (two's complement signed ints don't
-        // change bit patterns - see C++17 standard draft 7.8 §2 integral
+        // change bit patterns - see C++17 standard draft 7.8 ? integral
         // conversions[conv.integral])
         const typename std::make_unsigned<T>::type unsignedValue = value;
 
@@ -243,7 +243,7 @@ namespace Utility
         );
 
         // cast to an unsigned value (two's complement signed ints don't
-        // change bit patterns - see C++17 standard draft 7.8 §2 integral
+        // change bit patterns - see C++17 standard draft 7.8 ? integral
         // conversions[conv.integral])
         const typename std::make_unsigned<T>::type unsignedValue = value;
 
