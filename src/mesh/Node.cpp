@@ -955,7 +955,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPayloadSize = message->size;
                     generateLoadMessagesLeft = message->amount * packet->requestHandle;
                     generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
-                    generateLoadPriority = 2; // Default to LOW priority
+                    generateLoadPriority = 3; // Default to LOW priority
                     generateLoadWithPriorityFlag = false; // 清除标志
                     generateLoadMixedMode = false; // 清除混合模式
                     generateLoadRequestHandle = 0;
@@ -4558,12 +4558,6 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
             //新增命令: 收集 priority 分开的统计数据
             if (commandArgsSize > 3 && TERMARGS(3, "snd_prio"))
             {
-                GS->CollsndCount = 0;
-                GS->MultipleCount = 0;
-                
-                // **不重置 priority 统计** - 让数据继续累积
-                // priority 统计数据在接收 GENERATE_LOAD_CHUNK 时自动记录
-                
                 // 发送收集命令给所有节点
                 for (int j = 1; j <= TOTAL_NODE_NUM; j++) 
                 {
@@ -4571,7 +4565,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                         SendModuleActionMessage(
                             MessageType::MODULE_TRIGGER_ACTION,
                             j,
-                            (u8)NodeModuleTriggerActionMessages::COLLECT_TRANSMIT_DATA,
+                            (u8)NodeModuleTriggerActionMessages::COLLECT_MIXED_DATA,
                             0,
                             nullptr,
                             0,
@@ -4580,7 +4574,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     }
                 }
                 
-                trace("Priority statistics collection command sent (data preserved)" EOL);
+                trace("Collecting priority statistics from all nodes" EOL);
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
             
@@ -4640,10 +4634,10 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 
-            //新增命令: 显示混合模式的统计结果
+            //新增命令: 统计高和低優先權封包同時傳送结果
             if (commandArgsSize > 3 && TERMARGS(3, "result_mixed"))
             {
-                trace("\\n========== MIXED Mode Statistics ==========" EOL);
+                trace("\\n========== Priority Statistics ==========" EOL);
                 
                 u32 avgHigh = 0, avgLow = 0;
                 u32 totalHighRcv = 0, totalLowRcv = 0;
@@ -4654,6 +4648,22 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     if ((i+1) != destinationNode) {
                         u32 tempHigh = 0, tempLow = 0;
                         
+                        // 获取目标发送数（不含重传）
+                        u32 highTargetCount = sndCountHighPrio[i];
+                        u32 lowTargetCount = sndCountLowPrio[i];
+                        u32 totalTargetCount = highTargetCount + lowTargetCount;
+                        
+                        // 计算实际发送数（包含重传），使用和 result 相同的公式
+                        u32 actualTotalSend = (CollsndCount[i] + (GS->MultipleUnit * MultipleCount[i]));
+                        
+                        // 按比例分配实际发送数到 HIGH 和 LOW
+                        // 先算 HIGH，然后 LOW = 总数 - HIGH，避免舍入误差
+                        u32 highSendCount = 0;
+                        u32 lowSendCount = 0;
+                        if (totalTargetCount > 0) {
+                            highSendCount = (actualTotalSend * highTargetCount) / totalTargetCount;
+                            lowSendCount = actualTotalSend - highSendCount;  // 用减法避免舍入误差
+                        }
                         if (rcvCountHighPrio[i] > 0) {
                             tempHigh = avgDelayHighPrio[i] / rcvCountHighPrio[i];
                             avgHigh += tempHigh;
@@ -4666,41 +4676,44 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                             totalLowRcv += rcvCountLowPrio[i];
                         }
                         
-                        totalHighSnd += sndCountHighPrio[i];
-                        totalLowSnd += sndCountLowPrio[i];
+                        totalHighSnd += highSendCount;
+                        totalLowSnd += lowSendCount;
                         
-                        trace("Node %d: HIGH=%u ms (snd=%u, rcv=%u, PDR=%u%%), LOW=%u ms (snd=%u, rcv=%u, PDR=%u%%)" EOL, 
-                            i + 1, tempHigh, sndCountHighPrio[i], rcvCountHighPrio[i],
-                            sndCountHighPrio[i] > 0 ? (rcvCountHighPrio[i] * 100) / sndCountHighPrio[i] : 0,
-                            tempLow, sndCountLowPrio[i], rcvCountLowPrio[i],
-                            sndCountLowPrio[i] > 0 ? (rcvCountLowPrio[i] * 100) / sndCountLowPrio[i] : 0);
+                        trace("Node %d: HIGH=%u ms (snd=%u, rcv=%u), LOW=%u ms (snd=%u, rcv=%u)" EOL, 
+                            i + 1, 
+                            tempHigh, highSendCount, rcvCountHighPrio[i],
+                            tempLow, lowSendCount, rcvCountLowPrio[i]);
                     }
                 }
                 
                 u32 activeNodes = TOTAL_NODE_NUM - 1;
                 if (activeNodes > 0) {
-                    u32 avgHighDelay = totalHighRcv > 0 ? avgHigh / activeNodes : 0;
-                    u32 avgLowDelay = totalLowRcv > 0 ? avgLow / activeNodes : 0;
-                    u32 highPDR = totalHighSnd > 0 ? (totalHighRcv * 100) / totalHighSnd : 0;
-                    u32 lowPDR = totalLowSnd > 0 ? (totalLowRcv * 100) / totalLowSnd : 0;
+                    // 计算整体重传统计
+                    u32 totalHighRetrans = (totalHighSnd > totalHighRcv) ? (totalHighSnd - totalHighRcv) : 0;
+                    u32 totalLowRetrans = (totalLowSnd > totalLowRcv) ? (totalLowSnd - totalLowRcv) : 0;
+                    u32 overallHighRetransRate = (totalHighRcv > 0) ? ((totalHighRetrans * 100) / totalHighRcv) : 0;
+                    u32 overallLowRetransRate = (totalLowRcv > 0) ? ((totalLowRetrans * 100) / totalLowRcv) : 0;
                     
-                    trace("\\nOverall: HIGH=%u ms (snd=%u, rcv=%u, PDR=%u%%), LOW=%u ms (snd=%u, rcv=%u, PDR=%u%%)" EOL,
-                        avgHighDelay, totalHighSnd, totalHighRcv, highPDR,
-                        avgLowDelay, totalLowSnd, totalLowRcv, lowPDR);
+                    trace("\\nOverall: HIGH=%u ms (snd=%u, rcv=%u), LOW=%u ms (snd=%u, rcv=%u)" EOL,
+                        totalHighRcv > 0 ? avgHigh / activeNodes : 0, totalHighSnd, totalHighRcv,
+                        totalLowRcv > 0 ? avgLow / activeNodes : 0, totalLowSnd, totalLowRcv);
                     
                     if (totalHighRcv > 0 && totalLowRcv > 0) {
+                        u32 avgHighDelay = avgHigh / activeNodes;
+                        u32 avgLowDelay = avgLow / activeNodes;
                         if (avgHighDelay < avgLowDelay) {
                             u32 improvement = ((avgLowDelay - avgHighDelay) * 100) / avgLowDelay;
-                            trace("HIGH priority is %u%% faster than LOW" EOL, improvement);
+                            trace("HIGH priority is %u%% faster" EOL, improvement);
                         }
-                        if (highPDR > lowPDR) {
-                            trace("HIGH priority PDR is %u%% better than LOW (%u%% vs %u%%)" EOL, 
-                                highPDR - lowPDR, highPDR, lowPDR);
-                        }
-                        trace("Interleaving algorithm: Weighted Round-Robin with dynamic adjustment" EOL);
                     }
+                    
+                    // 显示发送统计
+                    u32 expectedTotal = GS->sndCount;
+                    u32 actualTotal = totalHighSnd + totalLowSnd;
+                    trace("Expected send: %u, Actual send: %u (HIGH=%u, LOW=%u)" EOL,
+                        expectedTotal, actualTotal, totalHighSnd, totalLowSnd);
                 }
-                trace("==========================================" EOL);
+                trace("=========================================" EOL);
                 
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
@@ -4711,37 +4724,65 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 trace("\\n========== Priority Statistics ==========" EOL);
                 
                 u32 avgHigh = 0, avgLow = 0;
-                u32 totalHighCount = 0, totalLowCount = 0;
+                u32 totalHighRcv = 0, totalLowRcv = 0;
+                u32 totalHighSnd = 0, totalLowSnd = 0;
                 
                 for (int i = 0; i < TOTAL_NODE_NUM; i++)
                 {
                     if ((i+1) != destinationNode) {
                         u32 tempHigh = 0, tempLow = 0;
                         
+                        // 获取目标发送数（不含重传）
+                        u32 highTargetCount = sndCountHighPrio[i];
+                        u32 lowTargetCount = sndCountLowPrio[i];
+                        u32 totalTargetCount = highTargetCount + lowTargetCount;
+                        
+                        // 计算实际发送数（包含重传），使用和 result 相同的公式
+                        u32 actualTotalSend = (CollsndCount[i] + (GS->MultipleUnit * MultipleCount[i]));
+                        
+                        // 按比例分配实际发送数到 HIGH 和 LOW
+                        // 先算 HIGH，然后 LOW = 总数 - HIGH，避免舍入误差
+                        u32 highSendCount = 0;
+                        u32 lowSendCount = 0;
+                        if (totalTargetCount > 0) {
+                            highSendCount = (actualTotalSend * highTargetCount) / totalTargetCount;
+                            lowSendCount = actualTotalSend - highSendCount;  // 用减法避免舍入误差
+                        }
                         if (rcvCountHighPrio[i] > 0) {
                             tempHigh = avgDelayHighPrio[i] / rcvCountHighPrio[i];
                             avgHigh += tempHigh;
-                            totalHighCount += rcvCountHighPrio[i];
+                            totalHighRcv += rcvCountHighPrio[i];
                         }
                         
                         if (rcvCountLowPrio[i] > 0) {
                             tempLow = avgDelayLowPrio[i] / rcvCountLowPrio[i];
                             avgLow += tempLow;
-                            totalLowCount += rcvCountLowPrio[i];
+                            totalLowRcv += rcvCountLowPrio[i];
                         }
                         
-                        trace("Node %d: HIGH=%u ms (n=%u), LOW=%u ms (n=%u)" EOL, 
-                            i + 1, tempHigh, rcvCountHighPrio[i], tempLow, rcvCountLowPrio[i]);
+                        totalHighSnd += highSendCount;
+                        totalLowSnd += lowSendCount;
+                        
+                        trace("Node %d: HIGH=%u ms (rcv=%u), LOW=%u ms (rcv=%u)" EOL, 
+                            i + 1, 
+                            tempHigh, rcvCountHighPrio[i],
+                            tempLow, rcvCountLowPrio[i]);
                     }
                 }
                 
                 u32 activeNodes = TOTAL_NODE_NUM - 1;
                 if (activeNodes > 0) {
-                    trace("\\nOverall: HIGH=%u ms (total=%u), LOW=%u ms (total=%u)" EOL,
-                        totalHighCount > 0 ? avgHigh / activeNodes : 0, totalHighCount,
-                        totalLowCount > 0 ? avgLow / activeNodes : 0, totalLowCount);
+                    // 计算整体重传统计
+                    u32 totalHighRetrans = (totalHighSnd > totalHighRcv) ? (totalHighSnd - totalHighRcv) : 0;
+                    u32 totalLowRetrans = (totalLowSnd > totalLowRcv) ? (totalLowSnd - totalLowRcv) : 0;
+                    u32 overallHighRetransRate = (totalHighRcv > 0) ? ((totalHighRetrans * 100) / totalHighRcv) : 0;
+                    u32 overallLowRetransRate = (totalLowRcv > 0) ? ((totalLowRetrans * 100) / totalLowRcv) : 0;
                     
-                    if (totalHighCount > 0 && totalLowCount > 0) {
+                    trace("\\nOverall: HIGH=%u ms (rcv=%u), LOW=%u ms (rcv=%u)" EOL,
+                        totalHighRcv > 0 ? avgHigh / activeNodes : 0, totalHighRcv,
+                        totalLowRcv > 0 ? avgLow / activeNodes : 0, totalLowRcv);
+                    
+                    if (totalHighRcv > 0 && totalLowRcv > 0) {
                         u32 avgHighDelay = avgHigh / activeNodes;
                         u32 avgLowDelay = avgLow / activeNodes;
                         if (avgHighDelay < avgLowDelay) {
@@ -4749,6 +4790,10 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                             trace("HIGH priority is %u%% faster" EOL, improvement);
                         }
                     }
+                    
+                    // 显示发送统计
+                    u32 expectedTotal = GS->sndCount;
+                    u32 actualTotal = totalHighSnd + totalLowSnd;
                 }
                 trace("=========================================" EOL);
                 
