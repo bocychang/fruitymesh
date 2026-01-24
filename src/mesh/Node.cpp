@@ -2281,7 +2281,15 @@ DeliveryPriority Node::GetPriorityOfMessage(const u8* data, MessageLength size)
             if (packet->moduleId == ModuleId::NODE 
                 && packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK)
             {
-                // 根據 generateLoadPriority 返回對應的 DeliveryPriority
+                // 檢查 payload 是否包含優先級標記
+                const MessageLength payloadLength = size - SIZEOF_CONN_PACKET_MODULE;
+                if (payloadLength > 0 && (packet->data[0] & 0xF0) == generateLoadPriorityMarker) {
+                    // 從 payload 的第一個字節提取優先級（低 4 位）
+                    u8 payloadPriority = packet->data[0] & 0x0F;
+                    return (DeliveryPriority)payloadPriority;
+                }
+                
+                // 如果沒有優先級標記，使用 generateLoadPriority（向後兼容）
                 // 0: VITAL, 1: HIGH, 2: MEDIUM, 3: LOW
                 return (DeliveryPriority)generateLoadPriority;
             }
