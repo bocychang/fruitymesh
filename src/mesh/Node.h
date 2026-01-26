@@ -141,6 +141,10 @@ private:
             SET_SCAN_INTERVAL = 23,
             //新設置scaninterval
             SET_CONN_INTERVAL = 24,
+            // 混合模式統計
+            COLLECT_MIXED_DATA = 25,
+            TRANSMIT_MIXED_HIGH_COUNT = 26,
+            TRANSMIT_MIXED_LOW_COUNT = 27,
         };
 
         enum class NodeModuleActionResponseMessages : u8
@@ -292,6 +296,27 @@ private:
             u8 timeBetweenMessagesDs;
         };
 #pragma pack(pop)
+
+#pragma pack(push)
+#pragma pack(1)
+        struct GenerateLoadWithPriorityMessage{
+            NodeId target;
+            u8 size;
+            u8 amount;
+            u8 timeBetweenMessagesDs;
+            u8 priority; // 0: Low Priority, 1: High Priority
+        };
+        
+        // 新增：混合模式結構（支援交錯傳輸）
+        struct GenerateLoadMixedMessage{
+            NodeId target;
+            u8 size;
+            u16 highAmount;      // HIGH priority 封包數量
+            u16 lowAmount;       // LOW priority 封包數量
+            u8 timeBetweenMessagesDs;
+            u8 interleavingRatio; // 交錯比例：每 N 個封包中 HIGH 的數量 (預設 3 表示 3:1)
+        };
+#pragma pack(pop)
         //State for straggered connection interval updates
         u16 connUpdateIntervalMs = 0;
         i8 connUpdateIndex = -1;
@@ -302,8 +327,29 @@ private:
         u8 generateLoadTimeSinceLastMessageDs = 0;
         u8 generateLoadPayloadSize = 0;
         u8 generateLoadRequestHandle = 0;
+        u8 generateLoadPriority = 3; // Default to LOW priority (DeliveryPriority::LOW = 3)
+        bool generateLoadWithPriorityFlag = false; // 标记是否使用 gen_load_prio 命令
+        
+        // 新增：混合模式交錯傳輸變數
+        bool generateLoadMixedMode = false; // 是否為混合交錯模式
+        u32 generateLoadHighTarget = 0;     // HIGH priority 目標總數
+        u32 generateLoadLowTarget = 0;      // LOW priority 目標總數
+        u32 generateLoadHighSent = 0;       // 已發送 HIGH 數量
+        u32 generateLoadLowSent = 0;        // 已發送 LOW 數量
+        u8 generateLoadInterleavingRatio = 3; // 交錯比例 (預設 3:1)
+        u32 generateLoadMixedCounter = 0;   // 混合模式計數器
+        
         constexpr static u8 generateLoadMagicNumber = 0x91;
+        constexpr static u8 generateLoadPriorityMarker = 0xF0; // 标记 priority 包
         NodeId generateLoadTarget = 0;
+
+        // 新增：分别统计 high priority 和 low priority
+        u32 avgDelayHighPrio[100] = {0}; 
+        u32 avgDelayLowPrio[100] = {0};
+        u32 rcvCountHighPrio[100] = {0};
+        u32 rcvCountLowPrio[100] = {0};
+        u32 sndCountHighPrio[100] = {0};  // 發送計數統計
+        u32 sndCountLowPrio[100] = {0};   // 發送計數統計
 
         u32 emergencyDisconnectTimerDs = 0; //The time since this node was not involved in any mesh. Can be reset by other means as well, e.g. when an emergency disconnect was sent.
         constexpr static u32 emergencyDisconnectTimerTriggerDs = SEC_TO_DS(/*Two minutes*/ 2 * 60);
@@ -338,7 +384,7 @@ private:
 
         //new
         NodeId parent;
-        int deg[7]; //需設node數 當前 3+1
+        int deg[100]; //需設 node数 扩大到 100 防止越界
 
         AdvJob* meshAdvJobHandle = nullptr;
 
