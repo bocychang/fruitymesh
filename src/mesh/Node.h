@@ -315,6 +315,7 @@ private:
             u16 lowAmount;       // LOW priority 封包數量
             u8 timeBetweenMessagesDs;
             u8 interleavingRatio; // 交錯比例：每 N 個封包中 HIGH 的數量 (預設 3 表示 3:1)
+            u8 requestHandle;     // 請求句柄（乘數），範圍 0-255
         };
 #pragma pack(pop)
         //State for straggered connection interval updates
@@ -334,8 +335,8 @@ private:
         bool generateLoadMixedMode = false; // 是否為混合交錯模式
         u32 generateLoadHighTarget = 0;     // HIGH priority 目標總數
         u32 generateLoadLowTarget = 0;      // LOW priority 目標總數
-        u32 generateLoadHighSent = 0;       // 已發送 HIGH 數量
-        u32 generateLoadLowSent = 0;        // 已發送 LOW 數量
+        u32 generateLoadHighSent = 0;       // 計劃發送 HIGH 數量（不含重傳）
+        u32 generateLoadLowSent = 0;        // 計劃發送 LOW 數量（不含重傳）
         u8 generateLoadInterleavingRatio = 3; // 交錯比例 (預設 3:1)
         u32 generateLoadMixedCounter = 0;   // 混合模式計數器
         
@@ -343,13 +344,11 @@ private:
         constexpr static u8 generateLoadPriorityMarker = 0xF0; // 标记 priority 包
         NodeId generateLoadTarget = 0;
 
-        // 新增：分别统计 high priority 和 low priority
+        // 新增：分别统计 high priority 和 low priority (接收统计在 private)
         u32 avgDelayHighPrio[100] = {0}; 
         u32 avgDelayLowPrio[100] = {0};
         u32 rcvCountHighPrio[100] = {0};
         u32 rcvCountLowPrio[100] = {0};
-        u32 sndCountHighPrio[100] = {0};  // 發送計數統計
-        u32 sndCountLowPrio[100] = {0};   // 發送計數統計
 
         u32 emergencyDisconnectTimerDs = 0; //The time since this node was not involved in any mesh. Can be reset by other means as well, e.g. when an emergency disconnect was sent.
         constexpr static u32 emergencyDisconnectTimerTriggerDs = SEC_TO_DS(/*Two minutes*/ 2 * 60);
@@ -366,7 +365,12 @@ private:
         void SendGroupResponse(NodeId receiver, NodeModuleActionResponseMessages actionType, u8 requestHandle, NodeId group, RecordStorageResultCode code);
         void SaveRecordStorageDynamicGroup(NodeId receiver, NodeModuleActionResponseMessages actionType, u8 requestHandle, NodeId group);
 
-    public:    
+    public:
+        // 實際發送計數（包含重傳）- 由 BaseConnection 累加，通過 COLLECT_MIXED_DATA 收集
+        u32 generateLoadHighActualSent = 0;  // 實際發送 HIGH 數量（含重傳）
+        u32 generateLoadLowActualSent = 0;   // 實際發送 LOW 數量（含重傳）
+        u32 sndCountHighPrio[100] = {0};     // 各節點 HIGH 發送數（通過 COLLECT_MIXED_DATA 收集）
+        u32 sndCountLowPrio[100] = {0};      // 各節點 LOW 發送數（通過 COLLECT_MIXED_DATA 收集）    
         DECLARE_CONFIG_AND_PACKED_STRUCT(NodeConfiguration);
 
 
