@@ -145,6 +145,8 @@ private:
             COLLECT_MIXED_DATA = 25,
             TRANSMIT_MIXED_HIGH_COUNT = 26,
             TRANSMIT_MIXED_LOW_COUNT = 27,
+            TRANSMIT_MIXED_HIGH_ACTUAL = 28,  // 實際發送數（包含重傳）
+            TRANSMIT_MIXED_LOW_ACTUAL = 29,   // 實際發送數（包含重傳）
         };
 
         enum class NodeModuleActionResponseMessages : u8
@@ -383,8 +385,10 @@ private:
         // 實際發送計數（包含重傳）- 由 BaseConnection 累加，通過 COLLECT_MIXED_DATA 收集
         u32 generateLoadHighActualSent = 0;  // 實際發送 HIGH 數量（含重傳）
         u32 generateLoadLowActualSent = 0;   // 實際發送 LOW 數量（含重傳）
-        u32 sndCountHighPrio[100] = {0};     // 各節點 HIGH 發送數（通過 COLLECT_MIXED_DATA 收集）
-        u32 sndCountLowPrio[100] = {0};      // 各節點 LOW 發送數（通過 COLLECT_MIXED_DATA 收集）    
+        u32 sndCountHighPrio[100] = {0};     // 各節點 HIGH 目標發送數（不含重傳，實際生成數）
+        u32 sndCountLowPrio[100] = {0};      // 各節點 LOW 目標發送數（不含重傳，實際生成數）
+        u32 sndCountHighPrioActual[100] = {0};  // 各節點 HIGH 實際發送數（包含重傳）
+        u32 sndCountLowPrioActual[100] = {0};   // 各節點 LOW 實際發送數（包含重傳）    
         DECLARE_CONFIG_AND_PACKED_STRUCT(NodeConfiguration);
 
 
