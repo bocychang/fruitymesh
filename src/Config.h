@@ -135,7 +135,7 @@ static_assert(false, "Featureset was not defined, which is mandatory!");
 //of connections configured in the ble stack (necessary for array sizing)
 //Cannot be changed in featureset as this must also be changed in the
 //linker script ram section at the same time
-#define TOTAL_NUM_CONNECTIONS 50
+#define TOTAL_NUM_CONNECTIONS 4
 
 // ########### Mesh Settings ##########################################
 
@@ -161,7 +161,7 @@ static_assert(false, "Featureset was not defined, which is mandatory!");
 
 // The total amount of send queue chunks. See: ConnectionQueueMemoryChunk
 #ifndef CONNECTION_QUEUE_MEMORY_CHUNK_AMOUNT
-#define CONNECTION_QUEUE_MEMORY_CHUNK_AMOUNT 1000
+#define CONNECTION_QUEUE_MEMORY_CHUNK_AMOUNT 40
 #endif
 
 // The maximum amount of chunks one connection can hold is limited by CONNECTION_QUEUE_MEMORY_MAX_CHUNKS_PER_CONNECTION.
@@ -169,7 +169,7 @@ static_assert(false, "Featureset was not defined, which is mandatory!");
 // Reestablishment. In such a case the rest of the connections have to share the rest of the chunks. If this rest gets
 // to low, a high amount of dropped packets is to be expected and should therefore be avoided.
 #ifndef CONNECTION_QUEUE_MEMORY_MAX_CHUNKS_PER_CONNECTION
-#define CONNECTION_QUEUE_MEMORY_MAX_CHUNKS_PER_CONNECTION 100
+#define CONNECTION_QUEUE_MEMORY_MAX_CHUNKS_PER_CONNECTION 25
 #endif
 
 // Each connection does also have a buffer to assemble packets that were split into 20 byte chunks
