@@ -905,6 +905,11 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadMessagesLeft = message->totalAmount * multiplier;
                     generateLoadRequestHandle = 0;
                     
+                    // 設定50%過濾參數
+                    generateLoadTotalMessages = message->totalAmount * multiplier;
+                    generateLoadSentCount = 0;
+                    generateLoadRecordingStarted = false;
+                    
                     GS->CollsndCount = 0;
                     GS->MultipleCount = 0;
                     GS->MultipleUnit = multiplier;
@@ -1010,6 +1015,11 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadMixedMode = false; // 清除混合模式
                     generateLoadRequestHandle = 0;
                     
+                    // 設定50%過濾參數
+                    generateLoadTotalMessages = message->amount * packet->requestHandle;
+                    generateLoadSentCount = 0;
+                    generateLoadRecordingStarted = false;
+                    
                     GS->CollsndCount = 0;
                     GS->MultipleCount = 0;
                     GS->MultipleUnit = packet->requestHandle;
@@ -1071,18 +1081,42 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
 
                 // 边界检查：防止数组越界
                 if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
-                    avgDelay[packetHeader->sender - 1] += packetDelay;
-                    rcvCount[packetHeader->sender - 1] += 1;
-                    GS->rcvCount += 1; // 累加全局接收计数
+                    // 增加從該發送節點接收到的訊息計數
+                    generateLoadReceivedPerSender[packetHeader->sender - 1]++;
                     
-                    // 新增：分别统计 high/low priority
-                    if (hasPriorityMarker) {
-                        if (receivedPriority <= 1) { // HIGH or VITAL
-                            avgDelayHighPrio[packetHeader->sender - 1] += packetDelay;
-                            rcvCountHighPrio[packetHeader->sender - 1] += 1;
-                        } else { // MEDIUM or LOW
-                            avgDelayLowPrio[packetHeader->sender - 1] += packetDelay;
-                            rcvCountLowPrio[packetHeader->sender - 1] += 1;
+                    // 檢查是否達到50%閾值（Sink端）
+                    if (!generateLoadSinkRecordingStarted[packetHeader->sender - 1] && generateLoadExpectedPerSender > 0) {
+                        if (generateLoadReceivedPerSender[packetHeader->sender - 1] > (generateLoadExpectedPerSender / 2)) {
+                            // 達到50%，重置該發送節點的統計數據
+                            generateLoadSinkRecordingStarted[packetHeader->sender - 1] = true;
+                            
+                            avgDelay[packetHeader->sender - 1] = 0;
+                            rcvCount[packetHeader->sender - 1] = 0;
+                            avgDelayHighPrio[packetHeader->sender - 1] = 0;
+                            avgDelayLowPrio[packetHeader->sender - 1] = 0;
+                            rcvCountHighPrio[packetHeader->sender - 1] = 0;
+                            rcvCountLowPrio[packetHeader->sender - 1] = 0;
+                            
+                            trace("INFO: Sink reached 50%% from sender %u (%u/%u), resetting receive statistics" EOL,
+                                packetHeader->sender, generateLoadReceivedPerSender[packetHeader->sender - 1], generateLoadExpectedPerSender);
+                        }
+                    }
+                    
+                    // 只在達到50%後才累加統計數據
+                    if (generateLoadSinkRecordingStarted[packetHeader->sender - 1]) {
+                        avgDelay[packetHeader->sender - 1] += packetDelay;
+                        rcvCount[packetHeader->sender - 1] += 1;
+                        GS->rcvCount += 1; // 累加全局接收计数
+                        
+                        // 新增：分别统计 high/low priority
+                        if (hasPriorityMarker) {
+                            if (receivedPriority <= 1) { // HIGH or VITAL
+                                avgDelayHighPrio[packetHeader->sender - 1] += packetDelay;
+                                rcvCountHighPrio[packetHeader->sender - 1] += 1;
+                            } else { // MEDIUM or LOW
+                                avgDelayLowPrio[packetHeader->sender - 1] += packetDelay;
+                                rcvCountLowPrio[packetHeader->sender - 1] += 1;
+                            }
                         }
                     }
                 }
@@ -1099,10 +1133,10 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 if (payloadCorrect == true && configuration.nodeId == packetHeader->receiver && packetHeader->sender != 10)
                     GS->rcvCount += 1;
 
-                if ((GS->rcvCount % 1000) == 0)
-                {
-                    logjson("NODE", "{\"type\":\"generate_load_chunk\",\"nodeId\":%d,\"size\":%u,\"payloadCorrect\":%u,\"receivedTime\":%u, \"stamp\":%u, \"delay\":%u}" SEP, packetHeader->sender, (u32)payloadLength, (u32)payloadCorrect, packetReceivedTime, packet->timestamp, packetDelay);
-                }
+                // if ((GS->rcvCount % 1000) == 0)
+                // {
+                //     logjson("NODE", "{\"type\":\"generate_load_chunk\",\"nodeId\":%d,\"size\":%u,\"payloadCorrect\":%u,\"receivedTime\":%u, \"stamp\":%u, \"delay\":%u}" SEP, packetHeader->sender, (u32)payloadLength, (u32)payloadCorrect, packetReceivedTime, packet->timestamp, packetDelay);
+                // }
                 // trace("node id : %d, generateTime : %u ms, sendTime : %u ms, receivedTime : %u ms, delay : %u ms," EOL, packetHeader->sender,packet->timestamp,packet->sendtime,packetReceivedTime,packetDelay);
             }
             //new collect data
@@ -1247,7 +1281,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 6;
+                TOTAL_NODE_NUM = 3;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -3649,6 +3683,30 @@ void Node::TimerEventHandler(u16 passedTimeDs)
         {
             generateLoadTimeSinceLastMessageDs -= generateLoadTimeBetweenMessagesDs;
             generateLoadMessagesLeft--;
+            
+            // 增加已發送計數
+            generateLoadSentCount++;
+            
+            // 檢查是否達到50%閾值，若是則重置統計數據（只記錄後50%）
+            if (!generateLoadRecordingStarted && generateLoadTotalMessages > 0) {
+                if (generateLoadSentCount > (generateLoadTotalMessages / 2)) {
+                    // 達到50%，開始記錄統計
+                    generateLoadRecordingStarted = true;
+                    
+                    // 重置發送端統計
+                    generateLoadHighSent = 0;
+                    generateLoadLowSent = 0;
+                    generateLoadHighActualSent = 0;
+                    generateLoadLowActualSent = 0;
+                    
+                    // 重置底層傳輸統計（CollsndCount 和 MultipleCount）
+                    GS->CollsndCount = 0;
+                    GS->MultipleCount = 0;
+                    
+                    trace("INFO: Reached 50%% threshold (%u/%u), resetting send statistics to record only last 50%%" EOL,
+                        generateLoadSentCount, generateLoadTotalMessages);
+                }
+            }
 
             DYNAMIC_ARRAY(payloadBuffer, generateLoadPayloadSize);
             CheckedMemset(payloadBuffer, generateLoadMagicNumber, generateLoadPayloadSize);
@@ -4492,7 +4550,13 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                         CollsndCount[i]=0;
                         avgDelay[i] = 0;
                         rcvCount[i] = 0;
+                        // Sink端50%追蹤初始化
+                        generateLoadReceivedPerSender[i] = 0;
+                        generateLoadSinkRecordingStarted[i] = false;
                 }
+                
+                // 設定每個發送節點預期發送的訊息數（用於Sink端50%判斷）
+                generateLoadExpectedPerSender = gltm.amount * requestHandle;
 
                 // start generating for 1 sink only
                 trace("Sending commands to nodes: ");
@@ -4703,7 +4767,13 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     rcvCountLowPrio[i] = 0;
                     sndCountHighPrio[i] = 0;
                     sndCountLowPrio[i] = 0;
+                    // Sink端50%追蹤初始化
+                    generateLoadReceivedPerSender[i] = 0;
+                    generateLoadSinkRecordingStarted[i] = false;
                 }
+                
+                // 設定每個發送節點預期發送的訊息數（用於Sink端50%判斷）
+                generateLoadExpectedPerSender = gltm.totalAmount * requestHandle;
 
                 // 顯示配置信息
                 trace("Starting RANDOM RATIO load: total=%u, interval=%uds, highPct=%u%%, multiplier=%u" EOL, 

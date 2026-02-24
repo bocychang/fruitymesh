@@ -137,10 +137,10 @@ void Conf::LoadDefaults(){
 
 //  設定connection interval和 scan interval
 // Default for non-simulator builds
-meshMinConnectionInterval = (u16)MSEC_TO_UNITS(100, CONFIG_UNIT_1_25_MS);
-meshMaxConnectionInterval = (u16)MSEC_TO_UNITS(100, CONFIG_UNIT_1_25_MS);
-meshScanIntervalLow = (u16)MSEC_TO_UNITS(100, CONFIG_UNIT_0_625_MS);
-meshScanIntervalHigh = (u16)MSEC_TO_UNITS(100, CONFIG_UNIT_0_625_MS);
+meshMinConnectionInterval = (u16)MSEC_TO_UNITS(50, CONFIG_UNIT_1_25_MS);
+meshMaxConnectionInterval = (u16)MSEC_TO_UNITS(50, CONFIG_UNIT_1_25_MS);
+meshScanIntervalLow = (u16)MSEC_TO_UNITS(50, CONFIG_UNIT_0_625_MS);
+meshScanIntervalHigh = (u16)MSEC_TO_UNITS(50, CONFIG_UNIT_0_625_MS);
 
 #if IS_ACTIVE(CONN_PARAM_UPDATE)
     // Initialize the long term connection intervals to the same values as the

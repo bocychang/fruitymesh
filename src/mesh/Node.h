@@ -356,6 +356,11 @@ private:
         bool generateLoadRandomRatioMode = false; // 是否為隨機比例模式
         u8 generateLoadRandomHighPercentage = 75; // HIGH priority 百分比 (0-100)
         
+        // 新增：50%資料過濾變數（只記錄後50%）
+        u32 generateLoadTotalMessages = 0;       // 總訊息數量
+        u32 generateLoadSentCount = 0;           // 已發送訊息計數
+        bool generateLoadRecordingStarted = false; // 是否已開始記錄（達到50%後）
+        
         constexpr static u8 generateLoadMagicNumber = 0x91;
         constexpr static u8 generateLoadPriorityMarker = 0xF0; // 标记 priority 包
         NodeId generateLoadTarget = 0;
@@ -365,6 +370,11 @@ private:
         u32 avgDelayLowPrio[100] = {0};
         u32 rcvCountHighPrio[100] = {0};
         u32 rcvCountLowPrio[100] = {0};
+        
+        // 新增：Sink端追蹤50%閾值（接收端）
+        u32 generateLoadExpectedPerSender = 0;      // 每個發送節點預期發送的訊息數
+        u32 generateLoadReceivedPerSender[100] = {0}; // 從每個節點接收到的訊息計數
+        bool generateLoadSinkRecordingStarted[100] = {false}; // 每個節點是否已開始記錄
 
         u32 emergencyDisconnectTimerDs = 0; //The time since this node was not involved in any mesh. Can be reset by other means as well, e.g. when an emergency disconnect was sent.
         constexpr static u32 emergencyDisconnectTimerTriggerDs = SEC_TO_DS(/*Two minutes*/ 2 * 60);
