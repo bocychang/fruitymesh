@@ -31,6 +31,87 @@
 #include "ChunkedPriorityPacketQueue.h"
 #include "BaseConnection.h"
 #include "Utility.h"
+#include "Config.h"
+
+// AQM (Active Queue Management) helper function using RED variant
+// Returns true if the packet should be dropped based on queue depth and congestion
+bool ChunkedPriorityPacketQueue::ShouldDropPacketAQM(DeliveryPriority prio) const
+{
+    // Only apply AQM to LOW and MEDIUM priority traffic
+    if (prio == DeliveryPriority::VITAL || prio == DeliveryPriority::HIGH)
+    {
+        return false;  // Never drop HIGH or VITAL priority packets via AQM
+    }
+
+    const u32 queueDepth = queues[(u32)prio].GetAmountOfPackets();
+    
+    // Check HIGH priority queue depth - if HIGH is congested, be MORE aggressive with LOW/MEDIUM
+    const u32 highQueueDepth = queues[(u32)DeliveryPriority::HIGH].GetAmountOfPackets();
+    const bool highPriorityUnderPressure = highQueueDepth > 10;  // HIGH queue has significant backlog
+
+    // Different thresholds and drop probabilities for LOW vs MEDIUM
+    u32 minThreshold, maxThreshold, maxDropProb;
+    
+    if (prio == DeliveryPriority::LOW)
+    {
+        minThreshold = AQM_LOW_QUEUE_MIN_THRESHOLD;
+        maxThreshold = AQM_LOW_QUEUE_THRESHOLD;
+        maxDropProb = AQM_MAX_DROP_PROBABILITY;
+        
+        // If HIGH priority is under pressure, be even MORE aggressive with LOW
+        if (highPriorityUnderPressure)
+        {
+            minThreshold = 10;  // Start dropping even earlier
+            maxDropProb = 85;   // Drop up to 85% of LOW packets
+        }
+    }
+    else  // MEDIUM priority
+    {
+        minThreshold = AQM_MEDIUM_QUEUE_MIN_THRESHOLD;
+        maxThreshold = AQM_MEDIUM_QUEUE_THRESHOLD;
+        maxDropProb = AQM_MEDIUM_MAX_DROP_PROBABILITY;
+        
+        // If HIGH priority is under pressure, also be more aggressive with MEDIUM
+        if (highPriorityUnderPressure)
+        {
+            minThreshold = 15;
+            maxDropProb = 60;
+        }
+    }
+
+    // No dropping if queue is below minimum threshold
+    if (queueDepth < minThreshold)
+    {
+        return false;
+    }
+
+    // Calculate drop probability based on queue depth (RED algorithm variant)
+    // Linear increase from minThreshold to maxThreshold
+    if (queueDepth >= maxThreshold)
+    {
+        // At or above threshold: use maximum drop probability
+        const u32 randomValue = Utility::GetRandomInteger() % 100;
+        const bool shouldDrop = randomValue < maxDropProb;
+        
+        // If queue is VERY full (>150% threshold), drop deterministically
+        if (queueDepth >= maxThreshold * 3 / 2)
+        {
+            return true;  // Always drop when severely congested
+        }
+        
+        return shouldDrop;
+    }
+    else
+    {
+        // Between minThreshold and maxThreshold: linear ramp
+        const u32 range = maxThreshold - minThreshold;
+        const u32 excess = queueDepth - minThreshold;
+        const u32 dropProbability = (excess * maxDropProb) / range;
+        
+        const u32 randomValue = Utility::GetRandomInteger() % 100;
+        return randomValue < dropProbability;
+    }
+}
 
 QueuePriorityPair ChunkedPriorityPacketQueue::GetSplitQueue()
 {
@@ -81,6 +162,38 @@ bool ChunkedPriorityPacketQueue::SplitAndAddMessage(DeliveryPriority prio, u8* d
     if ((u32)prio >= AMOUNT_OF_SEND_QUEUE_PRIORITIES)
     {
         SIMEXCEPTION(IllegalArgumentException);
+    }
+
+    // Track total queue attempts for statistics
+    aqmTotalAttempts++;
+
+    // Apply AQM (Active Queue Management) to LOW and MEDIUM priority packets
+    // This implements RED (Random Early Detection) to prevent queue congestion
+    if (ShouldDropPacketAQM(prio))
+    {
+        // Drop the packet proactively to prevent queue congestion
+        const u32 currentQueueDepth = queues[(u32)prio].GetAmountOfPackets();
+        const u32 highQueueDepth = queues[(u32)DeliveryPriority::HIGH].GetAmountOfPackets();
+        
+        if (prio == DeliveryPriority::LOW)
+        {
+            aqmDroppedPacketsLow++;
+            if (aqmDroppedPacketsLow % 10 == 1)  // Log every 10th drop to avoid spam
+            {
+                logt("AQM", "Dropped LOW (total:%u) - Queue: LOW=%u, HIGH=%u", 
+                     aqmDroppedPacketsLow, currentQueueDepth, highQueueDepth);
+            }
+        }
+        else if (prio == DeliveryPriority::MEDIUM)
+        {
+            aqmDroppedPacketsMedium++;
+            if (aqmDroppedPacketsMedium % 10 == 1)  // Log every 10th drop to avoid spam
+            {
+                logt("AQM", "Dropped MEDIUM (total:%u) - Queue: MEDIUM=%u, HIGH=%u", 
+                     aqmDroppedPacketsMedium, currentQueueDepth, highQueueDepth);
+            }
+        }
+        return false;  // Packet dropped by AQM
     }
 
     constexpr u32 MAX_VITAL_SIZE = 20 + SIZEOF_BASE_CONNECTION_SEND_DATA_PACKED;

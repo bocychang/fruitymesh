@@ -56,8 +56,16 @@ private:
     std::array<ChunkedPacketQueue, AMOUNT_OF_SEND_QUEUE_PRIORITIES> queues = {};
     std::array<u32,                AMOUNT_OF_SEND_QUEUE_PRIORITIES> priorityDroplets = {};
 
+    // AQM (Active Queue Management) statistics
+    u32 aqmDroppedPacketsLow = 0;      // Count of LOW priority packets dropped by AQM
+    u32 aqmDroppedPacketsMedium = 0;   // Count of MEDIUM priority packets dropped by AQM
+    u32 aqmTotalAttempts = 0;          // Total queue attempts for statistics
+
     QueuePriorityPair GetSplitQueue();
     QueuePriorityPairConst GetSplitQueue() const;
+
+    // AQM helper function to determine if packet should be dropped based on queue depth
+    bool ShouldDropPacketAQM(DeliveryPriority prio) const;
 
 public:
     ChunkedPriorityPacketQueue();
@@ -68,6 +76,11 @@ public:
     QueuePriorityPair GetSendQueue();
     ChunkedPacketQueue* GetQueueByPriority(DeliveryPriority prio);
     void RollbackLookAhead();
+
+    // AQM statistics accessors
+    u32 GetAQMDroppedPacketsLow() const { return aqmDroppedPacketsLow; }
+    u32 GetAQMDroppedPacketsMedium() const { return aqmDroppedPacketsMedium; }
+    u32 GetAQMTotalAttempts() const { return aqmTotalAttempts; }
 };
 
 

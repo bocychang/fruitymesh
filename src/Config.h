@@ -172,6 +172,48 @@ static_assert(false, "Featureset was not defined, which is mandatory!");
 #define CONNECTION_QUEUE_MEMORY_MAX_CHUNKS_PER_CONNECTION 25
 #endif
 
+// ########### Active Queue Management (AQM) Settings ##########################################
+// AQM settings for RED (Random Early Detection) variant to prevent queue congestion
+
+// Threshold for LOW priority queue to trigger aggressive AQM (in number of packets)
+// Lowered to be more aggressive in protecting HIGH priority traffic
+#ifndef AQM_LOW_QUEUE_THRESHOLD
+#define AQM_LOW_QUEUE_THRESHOLD 25
+#endif
+
+// Maximum drop probability when queue is at threshold (in percentage 0-100)
+// Increased to more aggressively drop LOW priority packets under congestion
+#ifndef AQM_MAX_DROP_PROBABILITY
+#define AQM_MAX_DROP_PROBABILITY 70
+#endif
+
+// Minimum queue size to start AQM (in number of packets)
+// Lowered to start dropping earlier
+#ifndef AQM_LOW_QUEUE_MIN_THRESHOLD
+#define AQM_LOW_QUEUE_MIN_THRESHOLD 15
+#endif
+
+// Threshold for MEDIUM priority queue (higher than LOW)
+#ifndef AQM_MEDIUM_QUEUE_THRESHOLD
+#define AQM_MEDIUM_QUEUE_THRESHOLD 30
+#endif
+
+#ifndef AQM_MEDIUM_QUEUE_MIN_THRESHOLD
+#define AQM_MEDIUM_QUEUE_MIN_THRESHOLD 20
+#endif
+
+// Maximum drop probability for MEDIUM priority (lower than LOW)
+#ifndef AQM_MEDIUM_MAX_DROP_PROBABILITY
+#define AQM_MEDIUM_MAX_DROP_PROBABILITY 40
+#endif
+
+// Enable/disable priority-based retransmission policy
+// When enabled: HIGH priority uses reliable transmission (WRITE_REQ)
+//               LOW priority uses unreliable transmission (WRITE_CMD, no retransmission)
+#ifndef ENABLE_PRIORITY_BASED_RETRANSMISSION
+#define ENABLE_PRIORITY_BASED_RETRANSMISSION 1
+#endif
+
 // Each connection does also have a buffer to assemble packets that were split into 20 byte chunks
 // This is the maximum size that these packets can have
 #ifndef PACKET_REASSEMBLY_BUFFER_SIZE

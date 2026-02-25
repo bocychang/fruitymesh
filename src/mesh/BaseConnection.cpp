@@ -35,6 +35,7 @@
 #include <ConnectionManager.h>
 #include <GlobalState.h>
 #include <MeshConnection.h>
+#include <Config.h>
 
 //new
 extern int flag;
@@ -131,11 +132,40 @@ bool BaseConnection::QueueData(const BaseConnectionSendData &sendData, u8 const 
 
     BaseConnectionSendDataPacked* sendDataPacked = (BaseConnectionSendDataPacked*)buffer;
     sendDataPacked->characteristicHandle = sendData.characteristicHandle;
+
+    // Determine the priority of this message
+    DeliveryPriority messagePriority = overwritePriority == DeliveryPriority::INVALID ? 
+                                        GetPriorityOfMessage(data, sendData.dataLength) : 
+                                        overwritePriority;
+
+#if ENABLE_PRIORITY_BASED_RETRANSMISSION == 1
+    // Apply priority-based retransmission policy:
+    // HIGH and VITAL priorities use reliable transmission (WRITE_REQ with retransmission)
+    // LOW and MEDIUM priorities use unreliable transmission (WRITE_CMD, no retransmission)
+    // This reduces network congestion and gives HIGH priority packets better delivery guarantees
+    DeliveryOption adjustedDeliveryOption = sendData.deliveryOption;
+    
+    if (messagePriority == DeliveryPriority::LOW || messagePriority == DeliveryPriority::MEDIUM)
+    {
+        // Force LOW and MEDIUM to unreliable transmission (no retransmission)
+        if (adjustedDeliveryOption == DeliveryOption::WRITE_REQ)
+        {
+            adjustedDeliveryOption = DeliveryOption::WRITE_CMD;
+            logt("CONN", "Downgraded %s priority packet to unreliable transmission", 
+                 messagePriority == DeliveryPriority::LOW ? "LOW" : "MEDIUM");
+        }
+    }
+    // HIGH and VITAL keep their original delivery option (allowing WRITE_REQ)
+    
+    sendDataPacked->deliveryOption = (u8)adjustedDeliveryOption;
+#else
+    // Original behavior: use the delivery option as specified by the caller
     sendDataPacked->deliveryOption = (u8)sendData.deliveryOption;
+#endif
 
     CheckedMemcpy(buffer + SIZEOF_BASE_CONNECTION_SEND_DATA_PACKED, data, sendData.dataLength.GetRaw());
 
-    const bool successfullyQueued = queue.SplitAndAddMessage(overwritePriority == DeliveryPriority::INVALID ? GetPriorityOfMessage(data, sendData.dataLength) : overwritePriority, buffer, bufferSize, connectionPayloadSize, messageHandle);
+    const bool successfullyQueued = queue.SplitAndAddMessage(messagePriority, buffer, bufferSize, connectionPayloadSize, messageHandle);
 
     if(successfullyQueued){
         if (fillTxBuffers && connectionState != ConnectionState::DISABLED) FillTransmitBuffers(); //maybe sure?
