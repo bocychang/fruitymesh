@@ -80,10 +80,11 @@ bool ChunkedPriorityPacketQueue::SplitAndAddMessage(DeliveryPriority prio, u8* d
 {
     if ((u32)prio >= AMOUNT_OF_SEND_QUEUE_PRIORITIES)
     {
-        SIMEXCEPTION(IllegalArgumentException);
+        logt("ERROR", "Invalid priority %u >= %u, defaulting to MEDIUM", (u32)prio, AMOUNT_OF_SEND_QUEUE_PRIORITIES);
+        prio = DeliveryPriority::MEDIUM; // Auto-correct to MEDIUM priority
     }
 
-    constexpr u32 MAX_VITAL_SIZE = 20 + SIZEOF_BASE_CONNECTION_SEND_DATA_PACKED;
+    constexpr u32 MAX_VITAL_SIZE = 40 + SIZEOF_BASE_CONNECTION_SEND_DATA_PACKED;
 
     if (prio == DeliveryPriority::VITAL && size <= MAX_VITAL_SIZE)
     {
@@ -99,9 +100,11 @@ bool ChunkedPriorityPacketQueue::SplitAndAddMessage(DeliveryPriority prio, u8* d
             //      The current implementation could maybe already allow this,
             //      if this check here is removed and everything is queued with
             //      SplitAndAddMessage. This however needs to be checked.
-            SIMEXCEPTION(IllegalArgumentException);
+            
+            // Auto-downgrade to HIGH priority instead of throwing exception
             prio = DeliveryPriority::HIGH;
-            logt("FATAL", "Vital queue message had to be queued with high prio queue because it was too large!");
+            logt("WARNING", "Vital queue message (size=%u) exceeds MAX_VITAL_SIZE (%u), downgraded to HIGH priority!", 
+                size, MAX_VITAL_SIZE);
         }
         return queues[(u32)prio].SplitAndAddMessage(data, size, payloadSizePerSplit, messageHandle);
     }
@@ -167,7 +170,8 @@ ChunkedPacketQueue* ChunkedPriorityPacketQueue::GetQueueByPriority(DeliveryPrior
 {
     if ((u32)prio >= AMOUNT_OF_SEND_QUEUE_PRIORITIES)
     {
-        SIMEXCEPTION(IllegalArgumentException);
+        logt("ERROR", "GetQueueByPriority: Invalid priority %u >= %u, defaulting to MEDIUM", (u32)prio, AMOUNT_OF_SEND_QUEUE_PRIORITIES);
+        prio = DeliveryPriority::MEDIUM; // Auto-correct to MEDIUM priority
     }
     return &queues[(u32)prio];
 }

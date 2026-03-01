@@ -2449,12 +2449,24 @@ DeliveryPriority Node::GetPriorityOfMessage(const u8* data, MessageLength size)
                 if (payloadLength > 0 && (packet->data[0] & 0xF0) == generateLoadPriorityMarker) {
                     // 從 payload 的第一個字節提取優先級（低 4 位）
                     u8 payloadPriority = packet->data[0] & 0x0F;
+                    
+                    // 安全檢查：確保 priority 值在有效範圍內 (0-3)
+                    if (payloadPriority >= 4) {
+                        logt("ERROR", "Invalid priority value %u in payload, defaulting to LOW", payloadPriority);
+                        payloadPriority = 3; // Default to LOW
+                    }
+                    
                     return (DeliveryPriority)payloadPriority;
                 }
                 
                 // 如果沒有優先級標記，使用 generateLoadPriority（向後兼容）
                 // 0: VITAL, 1: HIGH, 2: MEDIUM, 3: LOW
-                return (DeliveryPriority)generateLoadPriority;
+                u8 safePriority = generateLoadPriority;
+                if (safePriority >= 4) {
+                    logt("ERROR", "Invalid generateLoadPriority value %u, defaulting to LOW", safePriority);
+                    safePriority = 3; // Default to LOW
+                }
+                return (DeliveryPriority)safePriority;
             }
         }
     }
