@@ -1051,15 +1051,27 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 bool payloadCorrect = true;
                 const u8 payloadLength = sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE;
                 
-                // 新增：检测 priority 标记
+                // 新增：检测 priority 标记和序列号
                 u8 receivedPriority = 3; // 默认 LOW
                 bool hasPriorityMarker = false;
                 u32 startIdx = 0;
+                u32 receivedSeqNum = 0;
+                bool hasSeqNum = false;
                 
                 if (payloadLength > 0 && (payload[0] & 0xF0) == generateLoadPriorityMarker) {
                     hasPriorityMarker = true;
                     receivedPriority = payload[0] & 0x0F;
                     startIdx = 1;
+                }
+                
+                // 讀取序列號（4 bytes，在 priority marker 之後）
+                if (payloadLength >= startIdx + 4) {
+                    receivedSeqNum = (u32)payload[startIdx + 0]
+                                   | ((u32)payload[startIdx + 1] << 8)
+                                   | ((u32)payload[startIdx + 2] << 16)
+                                   | ((u32)payload[startIdx + 3] << 24);
+                    hasSeqNum = true;
+                    startIdx += 4; // 跳過序列號的 4 bytes
                 }
                 
                 // 验证 payload
@@ -1084,9 +1096,25 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     // 增加從該發送節點接收到的訊息計數
                     generateLoadReceivedPerSender[packetHeader->sender - 1]++;
                     
-                    // 檢查是否達到50%閾值（Sink端）
+                    // 檢查是否達到50%閾值（Sink端）- 使用序列號判斷
                     if (!generateLoadSinkRecordingStarted[packetHeader->sender - 1] && generateLoadExpectedPerSender > 0) {
-                        if (generateLoadReceivedPerSender[packetHeader->sender - 1] > (generateLoadExpectedPerSender / 2)) {
+                        bool shouldStartRecording = false;
+                        
+                        if (hasSeqNum) {
+                            // 使用序列號判斷（準確，不受丟包影響）
+                            shouldStartRecording = (receivedSeqNum > (generateLoadExpectedPerSender / 2));
+                            
+                            // Debug輸出：每50個封包輸出一次
+                            if (generateLoadReceivedPerSender[packetHeader->sender - 1] % 50 == 1) {
+                                trace("SEQ_CHECK: sender=%u, seqNum=%u, threshold=%u, shouldStart=%d" EOL,
+                                    packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender / 2, shouldStartRecording);
+                            }
+                        } else {
+                            // 備用：使用接收數量判斷（不準確，受丟包影響）
+                            shouldStartRecording = (generateLoadReceivedPerSender[packetHeader->sender - 1] > (generateLoadExpectedPerSender / 2));
+                        }
+                        
+                        if (shouldStartRecording) {
                             // 達到50%，重置該發送節點的統計數據
                             generateLoadSinkRecordingStarted[packetHeader->sender - 1] = true;
                             
@@ -1097,8 +1125,13 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                             rcvCountHighPrio[packetHeader->sender - 1] = 0;
                             rcvCountLowPrio[packetHeader->sender - 1] = 0;
                             
-                            trace("INFO: Sink reached 50%% from sender %u (%u/%u), resetting receive statistics" EOL,
-                                packetHeader->sender, generateLoadReceivedPerSender[packetHeader->sender - 1], generateLoadExpectedPerSender);
+                            if (hasSeqNum) {
+                                trace("INFO: Sink reached 50%% from sender %u using SEQUENCE NUMBER (seqNum=%u, expected=%u/2=%u)" EOL,
+                                    packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender, generateLoadExpectedPerSender / 2);
+                            } else {
+                                trace("INFO: Sink reached 50%% from sender %u using RECEIVE COUNT (rcv=%u/%u)" EOL,
+                                    packetHeader->sender, generateLoadReceivedPerSender[packetHeader->sender - 1], generateLoadExpectedPerSender);
+                            }
                         }
                     }
                     
@@ -1281,7 +1314,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 3;
+                TOTAL_NODE_NUM = 6;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -3711,6 +3744,9 @@ void Node::TimerEventHandler(u16 passedTimeDs)
             DYNAMIC_ARRAY(payloadBuffer, generateLoadPayloadSize);
             CheckedMemset(payloadBuffer, generateLoadMagicNumber, generateLoadPayloadSize);
 
+            // 設置序列號（在priority marker之後）
+            u32 currentOffset = 0;
+            
             // 新增：標記 priority（支援混合交錯模式、隨機比例模式和單一優先級模式）
             if (generateLoadWithPriorityFlag && generateLoadPayloadSize > 0) {
                 u8 currentPriority = generateLoadPriority;
@@ -3800,6 +3836,22 @@ void Node::TimerEventHandler(u16 passedTimeDs)
                 }
                 
                 payloadBuffer[0] = generateLoadPriorityMarker | (currentPriority & 0x0F);
+                currentOffset = 1; // Priority marker 占用 1 byte
+            }
+            
+            // 添加序列號（4 bytes）到 payload
+            if (generateLoadPayloadSize >= currentOffset + 4) {
+                // 將序列號寫入 payload（小端序）
+                payloadBuffer[currentOffset + 0] = (generateLoadSentCount >> 0) & 0xFF;
+                payloadBuffer[currentOffset + 1] = (generateLoadSentCount >> 8) & 0xFF;
+                payloadBuffer[currentOffset + 2] = (generateLoadSentCount >> 16) & 0xFF;
+                payloadBuffer[currentOffset + 3] = (generateLoadSentCount >> 24) & 0xFF;
+                
+                // Debug: 每100個封包輸出一次序列號
+                if (generateLoadSentCount % 100 == 1) {
+                    trace("SEQ_NUM: Sent packet with seqNum=%u (total=%u, 50%%=%u)" EOL,
+                        generateLoadSentCount, generateLoadTotalMessages, generateLoadTotalMessages / 2);
+                }
             }
 
             //new
