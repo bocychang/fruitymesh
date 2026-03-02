@@ -2932,14 +2932,29 @@ void CherrySim::SimulateConnections() {
             //Each connecitonInterval, we see if there are any packets to send
             if (ShouldSimConnectionIvTrigger(connectionIntervalMs, connection)) {
 
-                //Depending on the number of connections, we send a random amount of packets from the unreliable buffers
+                //Calculate the number of packets to send based on connection event length
+                //Approximation: Each packet takes ~1ms to transmit, event_length is in 1.25ms units
+                //So we can send roughly: (eventLength * 1.25) packets per connection event
                 u8 numConnections = GetNumSimConnections(currentNode);
-                u8 numPacketsToSend;
+                u16 eventLengthMs = currentNode->state.connectionEventLength * 1.25; // Convert to ms
+                u8 maxPacketsPerCE = (u8)eventLengthMs; // Use full CE time (no division by connections)
+                if (maxPacketsPerCE < 1) maxPacketsPerCE = 1;
+                if (maxPacketsPerCE > SIM_NUM_UNRELIABLE_BUFFERS) maxPacketsPerCE = SIM_NUM_UNRELIABLE_BUFFERS;
+                
+                // Debug: Print CE info occasionally (every 1000 connection events)
+                static u32 ceDebugCounter = 0;
+                // if ((ceDebugCounter++ % 1000) == 0) {
+                //     printf("[CE_DEBUG] Node %u, Conn %d: eventLength=%u, numConn=%u, maxPkt=%u, interval=%ums\n",
+                //            currentNode->index, i, currentNode->state.connectionEventLength, 
+                //            numConnections, maxPacketsPerCE, connectionIntervalMs);
+                // }
+                
+                // Fixed packet range: 6-8 packets per connection regardless of number of connections
+                u8 minPackets = 6;
+                u8 maxPacketsToSendRange = 8;
+                if (maxPacketsToSendRange < minPackets) maxPacketsToSendRange = minPackets; // Safety check
+                u8 numPacketsToSend = (u8)PSRNGINT(minPackets, maxPacketsToSendRange);
                 u32 unreliablePacketsSent = 0;
-
-                if (numConnections == 1) numPacketsToSend = (u8)PSRNGINT(0, SIM_NUM_UNRELIABLE_BUFFERS);
-                else if (numConnections == 2) numPacketsToSend = (u8)PSRNGINT(0, 5);
-                else numPacketsToSend = (u8)PSRNGINT(0, 3);
 
                 const double rssiMult = CalculateReceptionProbabilityForConnection(connection->owningNode, connection->partner);
                 if (rssiMult == 0)

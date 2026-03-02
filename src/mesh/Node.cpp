@@ -1105,10 +1105,10 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                             shouldStartRecording = (receivedSeqNum > (generateLoadExpectedPerSender / 2));
                             
                             // Debug輸出：每50個封包輸出一次
-                            if (generateLoadReceivedPerSender[packetHeader->sender - 1] % 50 == 1) {
-                                trace("SEQ_CHECK: sender=%u, seqNum=%u, threshold=%u, shouldStart=%d" EOL,
-                                    packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender / 2, shouldStartRecording);
-                            }
+                            // if (generateLoadReceivedPerSender[packetHeader->sender - 1] % 50 == 1) {
+                            //     trace("SEQ_CHECK: sender=%u, seqNum=%u, threshold=%u, shouldStart=%d" EOL,
+                            //         packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender / 2, shouldStartRecording);
+                            // }
                         } else {
                             // 備用：使用接收數量判斷（不準確，受丟包影響）
                             shouldStartRecording = (generateLoadReceivedPerSender[packetHeader->sender - 1] > (generateLoadExpectedPerSender / 2));
@@ -1125,13 +1125,13 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                             rcvCountHighPrio[packetHeader->sender - 1] = 0;
                             rcvCountLowPrio[packetHeader->sender - 1] = 0;
                             
-                            if (hasSeqNum) {
-                                trace("INFO: Sink reached 50%% from sender %u using SEQUENCE NUMBER (seqNum=%u, expected=%u/2=%u)" EOL,
-                                    packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender, generateLoadExpectedPerSender / 2);
-                            } else {
-                                trace("INFO: Sink reached 50%% from sender %u using RECEIVE COUNT (rcv=%u/%u)" EOL,
-                                    packetHeader->sender, generateLoadReceivedPerSender[packetHeader->sender - 1], generateLoadExpectedPerSender);
-                            }
+                            // if (hasSeqNum) {
+                            //     trace("INFO: Sink reached 50%% from sender %u using SEQUENCE NUMBER (seqNum=%u, expected=%u/2=%u)" EOL,
+                            //         packetHeader->sender, receivedSeqNum, generateLoadExpectedPerSender, generateLoadExpectedPerSender / 2);
+                            // } else {
+                            //     trace("INFO: Sink reached 50%% from sender %u using RECEIVE COUNT (rcv=%u/%u)" EOL,
+                            //         packetHeader->sender, generateLoadReceivedPerSender[packetHeader->sender - 1], generateLoadExpectedPerSender);
+                            // }
                         }
                     }
                     
@@ -2917,25 +2917,25 @@ joinMeBufferPacket* Node::DetermineBestClusterAsMaster()
 //Connect to big clusters but big clusters must connect nodes that are not able 
 u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 {
-    // switch (configuration.nodeId){
-    // case 1:
-    //     if (packet.payload.sender != 2) return 0;
-    //     break;
-    // case 2:
-    //     if (packet.payload.sender != 3) return 0;
-    //     break;
-    // case 3:
-    //     if (1) return 0;
-    //     break;  
-    // case 4:
-    //     if (packet.payload.sender != 5) return 0;
-    //     break;
-    // case 5:
-    //     if (1) return 0;
-    //     break;    
-    // default:
-    //    break;
-    // }
+    switch (configuration.nodeId){
+    case 1:
+        if (packet.payload.sender != 2) return 0;
+        break;
+    case 2:
+        if (packet.payload.sender != 3) return 0;
+        break;
+    case 3:
+        if (packet.payload.sender != 4) return 0;
+        break;  
+    case 4:
+        if (packet.payload.sender != 5) return 0;
+        break;
+    case 5:
+        if (packet.payload.sender != 6) return 0;
+        break;    
+    default:
+       break;
+    }
 
 
     //if(1) return 0;
