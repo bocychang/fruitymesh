@@ -3378,6 +3378,15 @@ void CherrySim::SimulateBatteryUsage()
             else if (conn->connectionInterval == 140) {
                 currentNode->nanoAmperePerMsTotal += conn100Ms;
             }
+            else if (conn->connectionInterval == 150) {
+                currentNode->nanoAmperePerMsTotal += conn100Ms;
+            }
+            else if (conn->connectionInterval == 160) {
+                currentNode->nanoAmperePerMsTotal += conn100Ms;
+            }
+            else if (conn->connectionInterval == 170) {
+                currentNode->nanoAmperePerMsTotal += conn100Ms;
+            }
             else {
                 printf("Conn interval not integrated into battery test" EOL);
                 SIMEXCEPTION(IllegalStateException);
