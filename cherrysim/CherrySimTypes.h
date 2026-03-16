@@ -186,6 +186,7 @@ struct SoftdeviceState {
     //Connection
     int connectionParamIntervalMs = 0;
     int connectionTimeoutMs = 0;
+    u16 connectionEventLength = 8; // Connection event length in 1.25ms units (default = 8)
 
     //Connecting security
     u8 currentLtkForEstablishingSecurity[16] = {}; //The Long Term key used to initiate the last encryption request for a connection

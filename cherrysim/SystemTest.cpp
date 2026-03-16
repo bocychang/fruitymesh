@@ -1639,6 +1639,11 @@ extern "C"
                 return 1;
             }
             cherrySimInstance->currentNode->state.configuredTotalConnectionCount = cfg->conn_cfg.params.gap_conn_cfg.conn_count;
+            cherrySimInstance->currentNode->state.connectionEventLength = cfg->conn_cfg.params.gap_conn_cfg.event_length;
+            // printf("[SIM] Node %u: Set connectionEventLength = %u (%.2f ms)\n", 
+            //        cherrySimInstance->currentNode->index, 
+            //        cfg->conn_cfg.params.gap_conn_cfg.event_length,
+            //        cfg->conn_cfg.params.gap_conn_cfg.event_length * 1.25);
         }
         else if (type == BLE_GAP_CFG_ROLE_COUNT)
         {
