@@ -98,7 +98,39 @@ enum class NodeSaveActions : u8 {
     ADD_DYNAMIC_GROUP         = 9,
     REMOVE_DYNAMIC_GROUP      = 10,
     CLEAR_DYNAMIC_GROUPS      = 11,
+    HISTORICAL_NEIGHBOR_CACHE = 12,
 };
+
+enum class HistoricalNeighborRole : u8
+{
+    UNKNOWN = 0,
+    PARENT = 1,
+    CHILD = 2,
+};
+
+#pragma pack(push)
+#pragma pack(1)
+struct HistoricalNeighborEntry
+{
+    NodeId nodeId;
+    u8 lastRole;
+    i8 avgRSSI;
+    i8 lastRSSI;
+    i16 hopsToSink;
+    u8 successCount;
+    u8 failureCount;
+    u32 lastValidTimeDs;
+    u8 validFlag;
+    u32 checksum;
+};
+
+struct HistoricalNeighborTable
+{
+    u8 version;
+    u8 entryCount;
+    HistoricalNeighborEntry entries[3];
+};
+#pragma pack(pop)
 
 /*
  * The node represents a mesh-enabled device and is a mandatory module (id 0).
@@ -390,6 +422,29 @@ private:
         void SendGroupResponse(NodeId receiver, NodeModuleActionResponseMessages actionType, u8 requestHandle, NodeId group, AddDynamicGroupResponseMessageCode code);
         void SendGroupResponse(NodeId receiver, NodeModuleActionResponseMessages actionType, u8 requestHandle, NodeId group, RecordStorageResultCode code);
         void SaveRecordStorageDynamicGroup(NodeId receiver, NodeModuleActionResponseMessages actionType, u8 requestHandle, NodeId group);
+
+        static constexpr u16 HISTORICAL_NEIGHBOR_RECORD_ID = RECORD_STORAGE_RECORD_ID_USER_BASE + 1;
+        static constexpr u8 HISTORICAL_NEIGHBOR_CACHE_VERSION = 1;
+        static constexpr u32 HISTORICAL_NEIGHBOR_CACHE_TTL_DS = SEC_TO_DS(60 * 30);
+        static constexpr u8 HISTORICAL_NEIGHBOR_FAIL_THRESHOLD = 3;
+        static constexpr u32 HISTORICAL_NEIGHBOR_MIN_PERSIST_INTERVAL_DS = SEC_TO_DS(30);
+
+        HistoricalNeighborTable historicalNeighborTable = {};
+        bool historicalNeighborDirty = false;
+        bool historicalNeighborPersistInFlight = false;
+        u32 historicalNeighborLastPersistAttemptDs = 0;
+
+        void InitializeHistoricalNeighborTable();
+        void LoadHistoricalNeighborTableFromStorage();
+        static u8 CountHistoricalNeighborEntries(const HistoricalNeighborTable& table);
+        u32 ComputeHistoricalNeighborEntryChecksum(const HistoricalNeighborEntry& entry) const;
+        bool IsHistoricalNeighborEntryChecksumValid(const HistoricalNeighborEntry& entry) const;
+        bool IsHistoricalNeighborEntryValidForRanking(const HistoricalNeighborEntry& entry) const;
+        HistoricalNeighborEntry* FindHistoricalNeighborEntry(NodeId nodeId);
+        const HistoricalNeighborEntry* FindHistoricalNeighborEntry(NodeId nodeId) const;
+        void UpsertHistoricalNeighborEntry(NodeId nodeId, HistoricalNeighborRole role, i8 rssi, i16 hopsToSink, bool success);
+        void PersistHistoricalNeighborTableIfNeeded(bool force);
+        i32 GetHistoricalRankingBonus(const joinMeBufferPacket& packet) const;
 
     public:
         // 實際發送計數（包含重傳）- 由 BaseConnection 累加，通過 COLLECT_MIXED_DATA 收集

@@ -55,6 +55,8 @@
 #include <ctime>
 #include <cmath>
 #include <cstdlib>
+#include <cstddef>
+#include <climits>
 
 #ifdef SIM_ENABLED
 #include <CherrySim.h>    //required for faking DFU
@@ -93,6 +95,8 @@ bool switchReporter=0; //default
 
 bool generate_load=0; //default generate load  
 
+constexpr i8 historicalNeighborDefaultRssi = -100;
+
 
 Node::Node()
     : Module(ModuleId::NODE, "node")
@@ -109,6 +113,7 @@ void Node::Init()
 {
     //Load default configuration
     ResetToDefaultConfiguration();
+    InitializeHistoricalNeighborTable();
     isInit = true;
 }
 
@@ -208,6 +213,8 @@ void Node::ConfigurationLoadedHandler(u8* migratableConfig, u16 migratableConfig
 
     //Print configuration and start node
     logt("NODE", "Config loaded nodeId:%d, connLossCount:%u, networkId:%d", configuration.nodeId, connectionLossCounter, configuration.networkId);
+
+    LoadHistoricalNeighborTableFromStorage();
 
     //Register the mesh service in the GATT table
     InitializeMeshGattService();
@@ -323,6 +330,9 @@ void Node::HandshakeDoneHandler(MeshConnection* connection, bool completedAsWinn
 {
     logt("HANDSHAKE", "############ Handshake done (asWinner:%u) ###############", completedAsWinner);
 
+    i8 lastKnownRssi = historicalNeighborDefaultRssi;
+    bool hasLastKnownRssi = false;
+
     StatusReporterModule* statusMod = (StatusReporterModule*)GS->node.GetModuleById(ModuleId::STATUS_REPORTER_MODULE);
     if(statusMod != nullptr){
         statusMod->SendLiveReport(LiveReportTypes::MESH_CONNECTED, 0, connection->partnerId, completedAsWinner);
@@ -335,6 +345,8 @@ void Node::HandshakeDoneHandler(MeshConnection* connection, bool completedAsWinn
     {
         joinMeBufferPacket* packet = &joinMePackets[i];
         if (packet->payload.sender == connection->partnerId) {
+            lastKnownRssi = packet->rssi;
+            hasLastKnownRssi = true;
             CheckedMemset(packet, 0x00, sizeof(joinMeBufferPacket));
         }
     }
@@ -411,6 +423,15 @@ void Node::HandshakeDoneHandler(MeshConnection* connection, bool completedAsWinn
 
     //Pass on the masterbit to someone if necessary
     HandOverMasterBitIfNecessary();
+
+    UpsertHistoricalNeighborEntry(
+        connection->partnerId,
+        completedAsWinner ? HistoricalNeighborRole::CHILD : HistoricalNeighborRole::PARENT,
+        hasLastKnownRssi ? lastKnownRssi : historicalNeighborDefaultRssi,
+        connection->hopsToSink,
+        true
+    );
+    PersistHistoricalNeighborTableIfNeeded(false);
 }
 
 MeshAccessAuthorization Node::CheckMeshAccessPacketAuthorization(BaseConnectionSendData * sendData, u8 const * data, FmKeyId fmKeyId, DataDirection direction)
@@ -1320,7 +1341,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 6;
+                TOTAL_NODE_NUM = 21;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -2751,6 +2772,16 @@ Node::DecisionStruct Node::DetermineBestClusterAvailable(void)
                     bestClusterAsMaster->attemptsToConnect++;
                 }
             }
+            else {
+                UpsertHistoricalNeighborEntry(
+                    bestClusterAsMaster->payload.sender,
+                    HistoricalNeighborRole::CHILD,
+                    bestClusterAsMaster->rssi,
+                    bestClusterAsMaster->payload.hopsToSink,
+                    false
+                );
+                PersistHistoricalNeighborTableIfNeeded(false);
+            }
 
             result.result = DecisionResult::CONNECT_AS_MASTER;
             result.preferredPartner = bestClusterAsMaster->payload.sender;
@@ -2839,6 +2870,16 @@ Node::DecisionStruct Node::DetermineBestClusterAvailable(void)
                     bestClusterAsMaster->lastConnectAttemptDs = GS->appTimerDs;
                     if(bestClusterAsMaster->attemptsToConnect <= 20) bestClusterAsMaster->attemptsToConnect++;
                 }
+                else {
+                    UpsertHistoricalNeighborEntry(
+                        bestClusterAsMaster->payload.sender,
+                        HistoricalNeighborRole::CHILD,
+                        bestClusterAsMaster->rssi,
+                        bestClusterAsMaster->payload.hopsToSink,
+                        false
+                    );
+                    PersistHistoricalNeighborTableIfNeeded(false);
+                }
 
                 result.result = DecisionResult::CONNECT_AS_MASTER;
                 result.preferredPartner = bestClusterAsMaster->payload.sender;
@@ -2923,26 +2964,26 @@ joinMeBufferPacket* Node::DetermineBestClusterAsMaster()
 //Connect to big clusters but big clusters must connect nodes that are not able 
 u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 {
-    switch (configuration.nodeId){
-    case 1:
-        if (packet.payload.sender != 2) return 0;
-        break;
-    case 2:
-         if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
-        break;
-    case 3:
-         if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
-        break;  
-    case 4:
-        if (1) return 0;
-        break;
-    case 5:
-        if (1) return 0;
-        break;    
-    default:
-        if (1) return 0;
-        break;
-    }
+    // switch (configuration.nodeId){
+    // case 1:
+    //     if (packet.payload.sender != 2) return 0;
+    //     break;
+    // case 2:
+    //      if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
+    //     break;
+    // case 3:
+    //      if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
+    //     break;  
+    // case 4:
+    //     if (1) return 0;
+    //     break;
+    // case 5:
+    //     if (1) return 0;
+    //     break;    
+    // default:
+    //     if (1) return 0;
+    //     break;
+    // }
 
 
     //if(1) return 0;
@@ -3009,6 +3050,10 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
     // u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore - (u32)(packet.payload.hopsToSink) * 1000;
 
     u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore;
+
+    const i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    const i32 adjustedScore = (i32)score + historicalBonus;
+    score = adjustedScore > 0 ? (u32)adjustedScore : 0;
 
     // //test score
     // // check device type
@@ -3092,6 +3137,10 @@ u32 Node::CalculateClusterScoreAsSlave(const joinMeBufferPacket& packet) const
     // score += (u32)(packet.payload.hopsToSink) * 1000 + (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
     score += (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
+
+    const i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    const i32 adjustedScore = (i32)score + historicalBonus;
+    score = adjustedScore > 0 ? (u32)adjustedScore : 0;
 
     // u32 score = 0;
 	// if(nodeType == DeviceType::SINK)
@@ -3524,6 +3573,8 @@ void Node::TimerEventHandler(u16 passedTimeDs)
         }
     }
 
+    PersistHistoricalNeighborTableIfNeeded(false);
+
     currentStateTimeoutDs -= passedTimeDs;
     clusterSizeTransitionTimeoutDs -= passedTimeDs;
 
@@ -3919,6 +3970,259 @@ void Node::KeepHighDiscoveryActive()
     }
 }
 
+void Node::InitializeHistoricalNeighborTable()
+{
+    CheckedMemset(&historicalNeighborTable, 0, sizeof(historicalNeighborTable));
+    historicalNeighborTable.version = HISTORICAL_NEIGHBOR_CACHE_VERSION;
+    historicalNeighborTable.entryCount = 0;
+    historicalNeighborDirty = false;
+    historicalNeighborPersistInFlight = false;
+    historicalNeighborLastPersistAttemptDs = 0;
+}
+
+void Node::LoadHistoricalNeighborTableFromStorage()
+{
+    InitializeHistoricalNeighborTable();
+
+    if (!GS->config.enableRecordStorage)
+    {
+        return;
+    }
+
+    const SizedData data = GS->recordStorage.GetRecordData(HISTORICAL_NEIGHBOR_RECORD_ID);
+    if (data.data == nullptr || data.length != sizeof(HistoricalNeighborTable))
+    {
+        return;
+    }
+
+    HistoricalNeighborTable loaded = {};
+    CheckedMemcpy(&loaded, data.data, sizeof(HistoricalNeighborTable));
+
+    if (loaded.version != HISTORICAL_NEIGHBOR_CACHE_VERSION)
+    {
+        return;
+    }
+
+    if (loaded.entryCount > 3)
+    {
+        return;
+    }
+
+    for (u32 i = 0; i < 3; i++)
+    {
+        if (loaded.entries[i].nodeId == 0)
+        {
+            continue;
+        }
+
+        if (!IsHistoricalNeighborEntryChecksumValid(loaded.entries[i]))
+        {
+            return;
+        }
+    }
+
+    historicalNeighborTable = loaded;
+    historicalNeighborTable.entryCount = CountHistoricalNeighborEntries(historicalNeighborTable);
+    logt("NODE", "Loaded %u historical neighbors from NVM", historicalNeighborTable.entryCount);
+}
+
+u8 Node::CountHistoricalNeighborEntries(const HistoricalNeighborTable& table)
+{
+    u8 count = 0;
+    for (u32 i = 0; i < 3; i++)
+    {
+        if (table.entries[i].nodeId != 0)
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+u32 Node::ComputeHistoricalNeighborEntryChecksum(const HistoricalNeighborEntry& entry) const
+{
+    return Utility::CalculateCrc32((u8*)&entry, offsetof(HistoricalNeighborEntry, checksum));
+}
+
+bool Node::IsHistoricalNeighborEntryChecksumValid(const HistoricalNeighborEntry& entry) const
+{
+    return entry.checksum == ComputeHistoricalNeighborEntryChecksum(entry);
+}
+
+bool Node::IsHistoricalNeighborEntryValidForRanking(const HistoricalNeighborEntry& entry) const
+{
+    if (entry.nodeId == 0) return false;
+    if (entry.validFlag == 0) return false;
+    if (!IsHistoricalNeighborEntryChecksumValid(entry)) return false;
+
+    const u32 ageDs = GS->appTimerDs - entry.lastValidTimeDs;
+    if (ageDs > HISTORICAL_NEIGHBOR_CACHE_TTL_DS) return false;
+    if (entry.failureCount >= HISTORICAL_NEIGHBOR_FAIL_THRESHOLD) return false;
+
+    return true;
+}
+
+HistoricalNeighborEntry* Node::FindHistoricalNeighborEntry(NodeId nodeId)
+{
+    for (u32 i = 0; i < 3; i++)
+    {
+        if (historicalNeighborTable.entries[i].nodeId == nodeId)
+        {
+            return &historicalNeighborTable.entries[i];
+        }
+    }
+    return nullptr;
+}
+
+const HistoricalNeighborEntry* Node::FindHistoricalNeighborEntry(NodeId nodeId) const
+{
+    for (u32 i = 0; i < 3; i++)
+    {
+        if (historicalNeighborTable.entries[i].nodeId == nodeId)
+        {
+            return &historicalNeighborTable.entries[i];
+        }
+    }
+    return nullptr;
+}
+
+void Node::UpsertHistoricalNeighborEntry(NodeId nodeId, HistoricalNeighborRole role, i8 rssi, i16 hopsToSink, bool success)
+{
+    if (nodeId == 0)
+    {
+        return;
+    }
+
+    HistoricalNeighborEntry* entry = FindHistoricalNeighborEntry(nodeId);
+    if (entry == nullptr)
+    {
+        for (u32 i = 0; i < 3; i++)
+        {
+            if (historicalNeighborTable.entries[i].nodeId == 0)
+            {
+                entry = &historicalNeighborTable.entries[i];
+                break;
+            }
+        }
+    }
+
+    if (entry == nullptr)
+    {
+        // Replace the weakest entry if table is full.
+        u32 weakestIndex = 0;
+        i32 weakestScore = INT32_MAX;
+        for (u32 i = 0; i < 3; i++)
+        {
+            const HistoricalNeighborEntry& candidate = historicalNeighborTable.entries[i];
+            const i32 score = (i32)candidate.successCount - (i32)(candidate.failureCount * 2);
+            if (score < weakestScore)
+            {
+                weakestScore = score;
+                weakestIndex = i;
+            }
+        }
+        entry = &historicalNeighborTable.entries[weakestIndex];
+    }
+
+    const bool isNewEntry = entry->nodeId != nodeId;
+    if (isNewEntry)
+    {
+        CheckedMemset(entry, 0, sizeof(HistoricalNeighborEntry));
+        entry->nodeId = nodeId;
+        entry->avgRSSI = rssi;
+    }
+    else
+    {
+        const i16 smoothed = (i16)entry->avgRSSI * 3 + (i16)rssi;
+        entry->avgRSSI = (i8)(smoothed / 4);
+    }
+
+    entry->lastRole = (u8)role;
+    entry->lastRSSI = rssi;
+    entry->hopsToSink = hopsToSink;
+
+    if (success)
+    {
+        if (entry->successCount < UINT8_MAX) entry->successCount++;
+        entry->failureCount = 0;
+        entry->lastValidTimeDs = GS->appTimerDs;
+        entry->validFlag = 1;
+    }
+    else
+    {
+        if (entry->failureCount < UINT8_MAX) entry->failureCount++;
+        if (entry->failureCount >= HISTORICAL_NEIGHBOR_FAIL_THRESHOLD)
+        {
+            entry->validFlag = 0;
+        }
+    }
+
+    entry->checksum = ComputeHistoricalNeighborEntryChecksum(*entry);
+    historicalNeighborTable.entryCount = CountHistoricalNeighborEntries(historicalNeighborTable);
+    historicalNeighborDirty = true;
+}
+
+void Node::PersistHistoricalNeighborTableIfNeeded(bool force)
+{
+    if (!historicalNeighborDirty) return;
+    if (!GS->config.enableRecordStorage) return;
+    if (historicalNeighborPersistInFlight) return;
+
+    if (!force)
+    {
+        const u32 elapsed = GS->appTimerDs - historicalNeighborLastPersistAttemptDs;
+        if (elapsed < HISTORICAL_NEIGHBOR_MIN_PERSIST_INTERVAL_DS)
+        {
+            return;
+        }
+    }
+
+    historicalNeighborLastPersistAttemptDs = GS->appTimerDs;
+    RecordStorageResultCode result = GS->recordStorage.SaveRecord(
+        HISTORICAL_NEIGHBOR_RECORD_ID,
+        (u8*)&historicalNeighborTable,
+        sizeof(historicalNeighborTable),
+        this,
+        (u32)NodeSaveActions::HISTORICAL_NEIGHBOR_CACHE
+    );
+
+    if (result == RecordStorageResultCode::SUCCESS)
+    {
+        historicalNeighborPersistInFlight = true;
+        historicalNeighborDirty = false;
+    }
+}
+
+i32 Node::GetHistoricalRankingBonus(const joinMeBufferPacket& packet) const
+{
+    const HistoricalNeighborEntry* entry = FindHistoricalNeighborEntry(packet.payload.sender);
+    if (entry == nullptr) return 0;
+    if (!IsHistoricalNeighborEntryValidForRanking(*entry)) return 0;
+
+    i32 bonus = 0;
+    bonus += (i32)entry->successCount * 200;
+    bonus -= (i32)entry->failureCount * 300;
+    bonus += ((i32)entry->avgRSSI + 100) * 8;
+
+    if (entry->hopsToSink >= 0)
+    {
+        bonus -= (i32)entry->hopsToSink * 120;
+    }
+
+    if ((HistoricalNeighborRole)entry->lastRole == HistoricalNeighborRole::PARENT)
+    {
+        bonus += 250;
+    }
+
+    // Small consistency bonus if current RSSI is not much worse than historical RSSI.
+    if (packet.rssi >= entry->lastRSSI - 10)
+    {
+        bonus += 80;
+    }
+
+    return bonus;
+}
+
 /*
  #########################################################################################################
  ### Helper functions
@@ -4238,6 +4542,14 @@ void Node::RecordStorageEventHandler(u16 recordId, RecordStorageResultCode resul
     {
         DynamicGroupSaveData* dgsd = (DynamicGroupSaveData*)userData;
         SendGroupResponse(dgsd->receiver, (NodeModuleActionResponseMessages)userType, dgsd->requestHandle, dgsd->group, resultCode);
+    }
+    else if (userType == (u32)NodeSaveActions::HISTORICAL_NEIGHBOR_CACHE)
+    {
+        historicalNeighborPersistInFlight = false;
+        if (resultCode != RecordStorageResultCode::SUCCESS)
+        {
+            historicalNeighborDirty = true;
+        }
     }
 }
 
