@@ -64,6 +64,7 @@
 
 //The number of connection attempts to one node before blacklisting this node for some time
 constexpr u8 connectAttemptsBeforeBlacklisting = 5;
+constexpr i32 historicalFastDecisionThreshold = 500;
 
 // The Service that is used for two nodes to communicate between each other
 // Fruity Mesh Service UUID 310bfe40-ed6b-11e3-a1be-0002a5d5c51b
@@ -856,18 +857,20 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 MeshConnections conn = GS->cm.GetMeshConnections(ConnectionDirection::INVALID);
                 trace("Number of mesh connections: %u" EOL, conn.count);
 
-                for (u32 i = 1; i <= conn.count; i++) {
+                for (u32 i = 0; i < conn.count; i++) {
+                    if (!conn.handles[i]) {
+                        continue;
+                    }
+
                     u8 hops = GS->cm.GetMeshHopsToShortestSink(conn.handles[i].GetConnection());
-                    trace("Connection %u has %d hops to sink" EOL, i, hops);
+                    trace("Connection %u has %d hops to sink" EOL, i + 1, hops);
 
                     if (hops >= 0 && hops < hopsToSink) {
                         hopsToSink = hops;
                     }
                 }
 
-                if (hopsToSink == 255) {
-                    hopsToSink = 0; // Fallback if no sink reachable
-                }
+                // Keep 255 as "unknown / unreachable" to avoid polluting statistics.
 
                 SendModuleActionMessage(
                     MessageType::MODULE_ACTION_RESPONSE,
@@ -1341,7 +1344,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 21;
+                TOTAL_NODE_NUM = 31;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -1863,11 +1866,23 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 }else if (packetHeader->sender == TOTAL_NODE_NUM){
                     GS->avgMeshHopCount = 0.0;
                     u32 temp = 0;
+                    u32 validCount = 0;
                     for (u32 i = 0; i < TOTAL_NODE_NUM; i++){
+                        if (meshHopCount[i] == 255)
+                        {
+                            trace("Node %u hopsToSink: unreachable" EOL, i + 1);
+                            continue;
+                        }
+
                         temp += meshHopCount[i];
+                        validCount++;
                         trace("Node %u hopsToSink: %u" EOL, i + 1, meshHopCount[i]);
                     }
-                    GS->avgMeshHopCount = (float)temp / (float)TOTAL_NODE_NUM;
+
+                    if (validCount > 0)
+                    {
+                        GS->avgMeshHopCount = (float)temp / (float)validCount;
+                    }
 
                     printf("avg hopsToSink: %.2f" EOL, GS->avgMeshHopCount);
                     trace("MAX hopsToSink: %u" EOL, GS->maxMeshHopCount);
@@ -3285,6 +3300,17 @@ void Node::GapAdvertisementMessageHandler(const FruityHal::GapAdvertisementRepor
                 targetBuffer->receivedTimeDs = GS->appTimerDs;
 
                 targetBuffer->payload = packet->payload;
+
+                // Fast path: if historical data strongly favors this candidate,
+                // trigger the decision window immediately instead of waiting for the normal cadence.
+                const i32 historicalBonus = GetHistoricalRankingBonus(*targetBuffer);
+                if (historicalBonus >= historicalFastDecisionThreshold)
+                {
+                    noNodesFoundCounter = 0;
+                    lastDecisionTimeDs = (GS->appTimerDs > Conf::maxTimeUntilDecisionDs)
+                        ? (GS->appTimerDs - Conf::maxTimeUntilDecisionDs)
+                        : 0;
+                }
             }
         }
     }
@@ -4873,7 +4899,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 
-            //new command: know all node hop count
+             //new command: know all node hop count
             if (commandArgsSize > 4 && TERMARGS(3, "hopcount"))
             {
                 //  0     1    2      3          4
@@ -4882,22 +4908,26 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 GS->maxMeshHopCount = 0;
                 GS->avgMeshHopCount = 0;
                 TOTAL_NODE_NUM = Utility::StringToU8(commandArgs[4]);
-                
-                // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
+
                 if (TOTAL_NODE_NUM > 100) {
                     trace("ERROR: TOTAL_NODE_NUM=%u exceeds maximum 100, clamping to 100" EOL, TOTAL_NODE_NUM);
                     TOTAL_NODE_NUM = 100;
                 }
 
+                if (destinationNode == 0 || destinationNode > TOTAL_NODE_NUM)
+                {
+                    return TerminalCommandHandlerReturnType::WRONG_ARGUMENT;
+                }
+
                 for (int i = 0; i < TOTAL_NODE_NUM ; i++){
-                    meshHopCount[i] = 0;
+                    meshHopCount[i] = 255;
                 } 
 
                 SendModuleActionMessage(
                     MessageType::MODULE_TRIGGER_ACTION,
-                    1,
+                    destinationNode,
                     (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
-                    1,
+                    destinationNode,
                     nullptr,
                     0,
                     false
