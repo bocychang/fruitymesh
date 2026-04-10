@@ -400,7 +400,7 @@ bool MeshConnection::SendData(BaseConnectionSendData* sendData, u8 const * data,
     //WARNING: Currently we only support WRITE_CMD to protect against SoftDevice faults
     //The SoftDevice will sometimes malfunction when receiving a lot of WRITE_REQ, also, they slow down the
     //sending of packets by a factor of 14, so we only use them for mesh critical functionality such as clustering
-    sendData->deliveryOption = DeliveryOption::WRITE_CMD;
+    //sendData->deliveryOption = DeliveryOption::WRITE_CMD;
 
     logt("CONN_DATA", "PUT_PACKET(%d):len:%d,type:%d,hex:%s",
             connectionId, sendData->dataLength.GetRaw(), (u32)packetHeader->messageType, stringBuffer);
@@ -624,7 +624,7 @@ void MeshConnection::StartHandshakeAfterMtuExchange()
     // new: 取得當前設備類型
     DeviceConfiguration config;
     ErrorType err = FruityHal::GetDeviceConfiguration(config);
-    DeviceType deviceType = DeviceType::INVALID;
+    DeviceType deviceType;
     if (err == ErrorType::SUCCESS) {
         deviceType = static_cast<DeviceType>(config.deviceType);
     }
@@ -649,9 +649,21 @@ void MeshConnection::StartHandshakeAfterMtuExchange()
     packet.payload.preferredConnectionInterval = 0; //Unused at the moment
     packet.payload.networkId = GS->node.configuration.networkId;
 
-    logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME, cID:%x, cSize:%d, hops:%d", connectionId, packet.payload.clusterId, packet.payload.clusterSize, packet.payload.hopsToSink);
+    if (packet.payload.hopsToSink < 0 || packet.payload.hopsToSink == 65535) {
+        
+    GS->cm.ForceDisconnectOtherMeshConnections(this, AppDisconnectReason::I_AM_SMALLER);
 
-    SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME_WITH_NETWORK_ID, true);
+    GS->node.SetClusterSize(1);
+    GS->node.clusterId = GS->node.GenerateClusterID();
+
+    // logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME, cID:%x, cSize:%d, hops:%d", connectionId, packet.payload.clusterId, packet.payload.clusterSize, packet.payload.hopsToSink);
+
+    // SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME_WITH_NETWORK_ID, true);
+    }else {
+        logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME, cID:%x, cSize:%d, hops:%d", connectionId, packet.payload.clusterId, packet.payload.clusterSize, packet.payload.hopsToSink);
+        
+        SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME, true);
+    }
 }
 
 void MeshConnection::ReceiveHandshakePacketHandler(BaseConnectionSendData* sendData, u8 const * data)
@@ -693,13 +705,6 @@ void MeshConnection::ReceiveHandshakePacketHandler(BaseConnectionSendData* sendD
 
 
             logt("HANDSHAKE", "IN <= %d CLUSTER_WELCOME clustID:%x, clustSize:%d, toSink:%d", packet->header.sender, packet->payload.clusterId, packet->payload.clusterSize, packet->payload.hopsToSink);
-            const i16 myHopsToSink = GS->cm.GetMeshHopsToShortestSink(this);
-            const bool myClusterHasSink = !(myHopsToSink < 0 || myHopsToSink == 65535);
-            const bool peerClusterHasSink = !(packet->payload.hopsToSink < 0 || packet->payload.hopsToSink == 65535);
-            const bool iAmBigger =
-                (myClusterHasSink != peerClusterHasSink)
-                    ? myClusterHasSink
-                    : (packet->payload.clusterSize < clusterSizeBackup);
             
 
             //PART 1: We do have the same cluster ID. Ouuups, should not have happened, run Forest!
@@ -714,39 +719,18 @@ void MeshConnection::ReceiveHandshakePacketHandler(BaseConnectionSendData* sendD
             // //original code
             // else if (packet->payload.clusterSize < clusterSizeBackup)
             // //new:add "&& packet->payload.deviceType != DeviceType::SINK"
-            else if (iAmBigger)
+            else if (packet->payload.clusterSize < clusterSizeBackup && (packet->payload.hopsToSink < 0 || packet->payload.hopsToSink == 65535))
             {
                 //I am the bigger cluster
                 logt("HANDSHAKE", "I am bigger %d vs %d", packet->payload.clusterSize, clusterSizeBackup);
 
                 if(direction == ConnectionDirection::DIRECTION_IN){
-                    if (myClusterHasSink && !peerClusterHasSink)
-                    {
-                        ConnPacketClusterWelcome outWelcome;
-                        outWelcome.header.messageType = MessageType::CLUSTER_WELCOME;
-                        outWelcome.header.sender = GS->node.configuration.nodeId;
-                        outWelcome.header.receiver = NODE_ID_HOPS_BASE + 1;
-
-                        outWelcome.payload.clusterId = clusterIDBackup;
-                        outWelcome.payload.clusterSize = clusterSizeBackup;
-                        outWelcome.payload.meshWriteHandle = GS->node.meshService.sendMessageCharacteristicHandle.valueHandle;
-                        outWelcome.payload.deviceType = DeviceType::INVALID;
-                        outWelcome.payload.hopsToSink = myHopsToSink;
-                        outWelcome.payload.preferredConnectionInterval = 0;
-                        outWelcome.payload.networkId = GS->node.configuration.networkId;
-
-                        logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME (sink-priority override), cID:%x, cSize:%d, hops:%d", connectionId, outWelcome.payload.clusterId, outWelcome.payload.clusterSize, outWelcome.payload.hopsToSink);
-                        SendHandshakeMessage((u8*)&outWelcome, SIZEOF_CONN_PACKET_CLUSTER_WELCOME_WITH_NETWORK_ID, true);
-                    }
-                    else
-                    {
-                        logt("HANDSHAKE", "############ Handshake stopped ###############");
-                        //We should have connected using an OUT connection, not an IN connection, disconnect
-                        DisconnectAndRemove(AppDisconnectReason::WRONG_DIRECTION);
-
-                        handshakeFailCode = LiveReportHandshakeFailCode::WRONG_DIRECTION;
-                    }
-                }
+                    logt("HANDSHAKE", "############ Handshake stopped ###############");
+                    //We should have connected using an OUT connection, not an IN connection, disconnect
+                    DisconnectAndRemove(AppDisconnectReason::WRONG_DIRECTION);
+                    
+                    handshakeFailCode = LiveReportHandshakeFailCode::WRONG_DIRECTION;
+            }
 
             }
 

@@ -65,6 +65,7 @@
 //The number of connection attempts to one node before blacklisting this node for some time
 constexpr u8 connectAttemptsBeforeBlacklisting = 5;
 constexpr i32 historicalFastDecisionThreshold = 500;
+constexpr u8 historicalPenaltyBypassNoNodeThreshold = 8;
 
 // The Service that is used for two nodes to communicate between each other
 // Fruity Mesh Service UUID 310bfe40-ed6b-11e3-a1be-0002a5d5c51b
@@ -3329,7 +3330,12 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 
     u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore;
 
-    const i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
+    {
+        historicalBonus = 0;
+    }
+
     const i32 adjustedScore = (i32)score + historicalBonus;
     score = adjustedScore > 0 ? (u32)adjustedScore : 0;
 
@@ -3416,7 +3422,12 @@ u32 Node::CalculateClusterScoreAsSlave(const joinMeBufferPacket& packet) const
 
     score += (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
-    const i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
+    {
+        historicalBonus = 0;
+    }
+
     const i32 adjustedScore = (i32)score + historicalBonus;
     score = adjustedScore > 0 ? (u32)adjustedScore : 0;
 
