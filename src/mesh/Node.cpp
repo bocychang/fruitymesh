@@ -79,7 +79,7 @@ int flag = -1; // 開關用
 int counta = 0; // 測試關閉啟用count數
 int testdis=0;
 //new: avg delay
-u8 TOTAL_NODE_NUM = -1;//nnber 注意 17
+u8 TOTAL_NODE_NUM = 0;//nnber 注意 17
 
 u32 MultipleCount[100];
 u32 CollsndCount[100];
@@ -97,6 +97,29 @@ struct HopCountTopologyPayload
 };
 u8 hopCountNeighborCount[100];
 NodeId hopCountNeighbors[100][HOPCOUNT_MAX_NEIGHBORS];
+
+static void ResetNodeRuntimeBuffers()
+{
+    TOTAL_NODE_NUM = 0;
+    root = 0;
+    init = -1;
+    numNodes = -1;
+    flag = 0;
+    counta = 0;
+    testdis = 0;
+
+    hopCountStartNode = 0;
+    hopCountVisitedCount = 0;
+
+    CheckedMemset(MultipleCount, 0, sizeof(MultipleCount));
+    CheckedMemset(CollsndCount, 0, sizeof(CollsndCount));
+    CheckedMemset(avgDelay, 0, sizeof(avgDelay));
+    CheckedMemset(meshHopCount, 0xFF, sizeof(meshHopCount));
+    CheckedMemset(rcvCount, 0, sizeof(rcvCount));
+
+    CheckedMemset(hopCountNeighborCount, 0, sizeof(hopCountNeighborCount));
+    CheckedMemset(hopCountNeighbors, 0, sizeof(hopCountNeighbors));
+}
 
 int ssettime=-1; // ssettime 開關
 int adjust=-1; //調整誤差 開關
@@ -125,6 +148,7 @@ void Node::Init()
 {
     //Load default configuration
     ResetToDefaultConfiguration();
+    ResetNodeRuntimeBuffers();
     InitializeHistoricalNeighborTable();
     isInit = true;
 }
@@ -1398,7 +1422,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 31;
+                TOTAL_NODE_NUM = 21;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -2789,7 +2813,7 @@ void Node::UpdateJoinMePacket()
 
     //test mesh finish time
 
-    if(clusterSize == 31){
+    if(clusterSize == 21){
         trace("##############test mesh finish time##############"EOL);
         trace("Delaytimer : %u Utc : %u " EOL, GS->delaytimer, GS->timeManager.GetUtcTime());
         trace("##############test mesh finish time##############"EOL);
@@ -3032,6 +3056,68 @@ Node::DecisionStruct Node::DetermineBestClusterAvailable(void)
 
             result.result = DecisionResult::CONNECT_AS_SLAVE;
             result.preferredPartner = bestClusterAsSlave->payload.sender;
+            return result;
+        }
+
+        // Fallback merge path (does not change scoring formula):
+        // if no slave candidate is found by scoring, still allow merge into a clearly
+        // larger nearby cluster to avoid long-term deadlocks.
+        joinMeBufferPacket* fallbackBiggerCluster = nullptr;
+        for (u32 i = 0; i < joinMePackets.size(); i++)
+        {
+            joinMeBufferPacket* candidate = &joinMePackets[i];
+            if (candidate->payload.sender == 0) continue;
+            if (GS->appTimerDs - candidate->receivedTimeDs > MAX_JOIN_ME_PACKET_AGE_DS) continue;
+            if (candidate->payload.clusterId == this->clusterId) continue;
+            if (candidate->payload.clusterSize <= GetClusterSize()) continue;
+            if (candidate->rssi < STABLE_CONNECTION_RSSI_THRESHOLD) continue;
+
+            if (fallbackBiggerCluster == nullptr
+                || candidate->payload.clusterSize > fallbackBiggerCluster->payload.clusterSize
+                || (candidate->payload.clusterSize == fallbackBiggerCluster->payload.clusterSize
+                    && candidate->payload.freeMeshOutConnections > fallbackBiggerCluster->payload.freeMeshOutConnections)
+                || (candidate->payload.clusterSize == fallbackBiggerCluster->payload.clusterSize
+                    && candidate->payload.freeMeshOutConnections == fallbackBiggerCluster->payload.freeMeshOutConnections
+                    && candidate->rssi > fallbackBiggerCluster->rssi))
+            {
+                fallbackBiggerCluster = candidate;
+            }
+        }
+
+        if (fallbackBiggerCluster != nullptr)
+        {
+            currentAckId = fallbackBiggerCluster->payload.clusterId;
+            logt("DECISION", "Fallback merge to bigger cluster %u via node %u", currentAckId, fallbackBiggerCluster->payload.sender);
+
+            if (GS->config.meshMaxInConnections == 1)
+            {
+                bool freshConnectionAvailable = false;
+                BaseConnections conns = GS->cm.GetBaseConnections(ConnectionDirection::INVALID);
+                for (u32 i = 0; i < conns.count; i++)
+                {
+                    BaseConnectionHandle conn = conns.handles[i];
+                    if (conn)
+                    {
+                        if (conn.GetCreationTimeDs() + Conf::meshHandshakeTimeoutDs > GS->appTimerDs)
+                        {
+                            freshConnectionAvailable = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!freshConnectionAvailable && GS->cm.freeMeshInConnections == 0)
+                {
+                    GS->cm.ForceDisconnectOtherMeshConnections(nullptr, AppDisconnectReason::SHOULD_WAIT_AS_SLAVE);
+                    SetClusterSize(1);
+                    clusterId = GenerateClusterID();
+                }
+            }
+
+            UpdateJoinMePacket();
+
+            result.result = DecisionResult::CONNECT_AS_SLAVE;
+            result.preferredPartner = fallbackBiggerCluster->payload.sender;
             return result;
         }
 

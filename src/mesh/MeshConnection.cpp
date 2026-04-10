@@ -621,10 +621,10 @@ void MeshConnection::StartHandshakeAfterMtuExchange()
 
     logt("HANDSHAKE", "############ Handshake starting ###############");
 
-    // new: 取得當前設備類型
+    //Retrieve the current device type for handshake metadata.
     DeviceConfiguration config;
     ErrorType err = FruityHal::GetDeviceConfiguration(config);
-    DeviceType deviceType;
+    DeviceType deviceType = DeviceType::INVALID;
     if (err == ErrorType::SUCCESS) {
         deviceType = static_cast<DeviceType>(config.deviceType);
     }
@@ -649,20 +649,21 @@ void MeshConnection::StartHandshakeAfterMtuExchange()
     packet.payload.preferredConnectionInterval = 0; //Unused at the moment
     packet.payload.networkId = GS->node.configuration.networkId;
 
-    if (packet.payload.hopsToSink < 0 || packet.payload.hopsToSink == 65535) {
-        
-    GS->cm.ForceDisconnectOtherMeshConnections(this, AppDisconnectReason::I_AM_SMALLER);
+    const bool iAmSinkCluster = !(packet.payload.hopsToSink < 0 || packet.payload.hopsToSink == 65535);
 
-    GS->node.SetClusterSize(1);
-    GS->node.clusterId = GS->node.GenerateClusterID();
+    if (!iAmSinkCluster) {
+        GS->cm.ForceDisconnectOtherMeshConnections(this, AppDisconnectReason::I_AM_SMALLER);
 
-    // logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME, cID:%x, cSize:%d, hops:%d", connectionId, packet.payload.clusterId, packet.payload.clusterSize, packet.payload.hopsToSink);
+        GS->node.SetClusterSize(1);
+        GS->node.clusterId = GS->node.GenerateClusterID();
 
-    // SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME_WITH_NETWORK_ID, true);
-    }else {
+        //Non-sink clusters reset locally and do not initiate CLUSTER_WELCOME.
+        return;
+    }
+    else {
         logt("HANDSHAKE", "OUT => conn(%u) CLUSTER_WELCOME, cID:%x, cSize:%d, hops:%d", connectionId, packet.payload.clusterId, packet.payload.clusterSize, packet.payload.hopsToSink);
         
-        SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME, true);
+        SendHandshakeMessage((u8*) &packet, SIZEOF_CONN_PACKET_CLUSTER_WELCOME_WITH_NETWORK_ID, true);
     }
 }
 
@@ -705,6 +706,10 @@ void MeshConnection::ReceiveHandshakePacketHandler(BaseConnectionSendData* sendD
 
 
             logt("HANDSHAKE", "IN <= %d CLUSTER_WELCOME clustID:%x, clustSize:%d, toSink:%d", packet->header.sender, packet->payload.clusterId, packet->payload.clusterSize, packet->payload.hopsToSink);
+
+            const i16 myHopsToSink = GS->cm.GetMeshHopsToShortestSink(this);
+            const bool myClusterHasSink = !(myHopsToSink < 0 || myHopsToSink == 65535);
+            const bool peerClusterHasSink = !(packet->payload.hopsToSink < 0 || packet->payload.hopsToSink == 65535);
             
 
             //PART 1: We do have the same cluster ID. Ouuups, should not have happened, run Forest!
@@ -719,7 +724,10 @@ void MeshConnection::ReceiveHandshakePacketHandler(BaseConnectionSendData* sendD
             // //original code
             // else if (packet->payload.clusterSize < clusterSizeBackup)
             // //new:add "&& packet->payload.deviceType != DeviceType::SINK"
-            else if (packet->payload.clusterSize < clusterSizeBackup && (packet->payload.hopsToSink < 0 || packet->payload.hopsToSink == 65535))
+            else if (
+                packet->payload.clusterSize < clusterSizeBackup
+                || (myClusterHasSink && !peerClusterHasSink)
+            )
             {
                 //I am the bigger cluster
                 logt("HANDSHAKE", "I am bigger %d vs %d", packet->payload.clusterSize, clusterSizeBackup);
