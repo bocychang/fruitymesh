@@ -1638,7 +1638,16 @@ extern "C"
                 SIMEXCEPTION(NotImplementedException);
                 return 1;
             }
-            cherrySimInstance->currentNode->state.configuredTotalConnectionCount = cfg->conn_cfg.params.gap_conn_cfg.conn_count;
+            const u8 requestedTotalConnectionCount = cfg->conn_cfg.params.gap_conn_cfg.conn_count;
+            if (requestedTotalConnectionCount > SIM_MAX_CONNECTION_NUM)
+            {
+                // Keep the simulator in a valid state even if the exception is configured as ignored.
+                cherrySimInstance->currentNode->state.configuredTotalConnectionCount = SIM_MAX_CONNECTION_NUM;
+                SIMEXCEPTION(IllegalArgumentException);
+                return NRF_ERROR_INVALID_PARAM;
+            }
+
+            cherrySimInstance->currentNode->state.configuredTotalConnectionCount = requestedTotalConnectionCount;
             cherrySimInstance->currentNode->state.connectionEventLength = cfg->conn_cfg.params.gap_conn_cfg.event_length;
             // printf("[SIM] Node %u: Set connectionEventLength = %u (%.2f ms)\n", 
             //        cherrySimInstance->currentNode->index, 
@@ -1652,8 +1661,40 @@ extern "C"
                 SIMEXCEPTION(NotImplementedException);
                 return 1;
             }
-            cherrySimInstance->currentNode->state.configuredPeripheralConnectionCount = cfg->gap_cfg.role_count_cfg.periph_role_count;
-            cherrySimInstance->currentNode->state.configuredCentralConnectionCount    = cfg->gap_cfg.role_count_cfg.central_role_count;
+            const u8 requestedPeripheralConnectionCount = cfg->gap_cfg.role_count_cfg.periph_role_count;
+            const u8 requestedCentralConnectionCount = cfg->gap_cfg.role_count_cfg.central_role_count;
+
+            u8 maxConfiguredConnectionCount = cherrySimInstance->currentNode->state.configuredTotalConnectionCount;
+            if (maxConfiguredConnectionCount > SIM_MAX_CONNECTION_NUM)
+            {
+                maxConfiguredConnectionCount = SIM_MAX_CONNECTION_NUM;
+            }
+
+            const u16 requestedRoleConnectionCount = static_cast<u16>(requestedPeripheralConnectionCount) + static_cast<u16>(requestedCentralConnectionCount);
+            if (
+                requestedPeripheralConnectionCount > SIM_MAX_CONNECTION_NUM
+                || requestedCentralConnectionCount > SIM_MAX_CONNECTION_NUM
+                || requestedRoleConnectionCount > maxConfiguredConnectionCount
+            )
+            {
+                // Keep role counts consistent with configured total to avoid out-of-bounds accesses later.
+                const u8 clampedPeripheralConnectionCount = (requestedPeripheralConnectionCount > maxConfiguredConnectionCount)
+                    ? maxConfiguredConnectionCount
+                    : requestedPeripheralConnectionCount;
+                const u8 remainingConnectionSlots = maxConfiguredConnectionCount - clampedPeripheralConnectionCount;
+                const u8 clampedCentralConnectionCount = (requestedCentralConnectionCount > remainingConnectionSlots)
+                    ? remainingConnectionSlots
+                    : requestedCentralConnectionCount;
+
+                cherrySimInstance->currentNode->state.configuredPeripheralConnectionCount = clampedPeripheralConnectionCount;
+                cherrySimInstance->currentNode->state.configuredCentralConnectionCount = clampedCentralConnectionCount;
+
+                SIMEXCEPTION(IllegalArgumentException);
+                return NRF_ERROR_INVALID_PARAM;
+            }
+
+            cherrySimInstance->currentNode->state.configuredPeripheralConnectionCount = requestedPeripheralConnectionCount;
+            cherrySimInstance->currentNode->state.configuredCentralConnectionCount    = requestedCentralConnectionCount;
         }
 
         return 0;

@@ -112,6 +112,18 @@ CherrySim* cherrySimInstance = nullptr; // Use this to access the simulator from
 NRF_UART_Type* simUartPtr = nullptr;
 bool meshGwCommunication = false;
 
+static u32 GetSafeConfiguredTotalConnectionCount(const NodeEntry* node)
+{
+    const u32 configuredConnectionCount = node->state.configuredTotalConnectionCount;
+    if (configuredConnectionCount > SIM_MAX_CONNECTION_NUM)
+    {
+        SIMEXCEPTION(IllegalStateException);
+        return SIM_MAX_CONNECTION_NUM;
+    }
+
+    return configuredConnectionCount;
+}
+
 //This is normally populated by the linker script when compiling FruityMesh,
 //Sadly, this must be done manually for the simulator. Include all the connection resolvers used
 ConnTypeResolver connTypeResolvers[] = {
@@ -1512,7 +1524,7 @@ TerminalCommandHandlerReturnType CherrySim::TerminalCommandHandler(const std::ve
             return TerminalCommandHandlerReturnType::SUCCESS;
         }
         else if (commandArgs[1] == "loss") {
-            for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+            for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++) {
                 if (currentNode->state.connections[i].connectionActive) {
                     printf("Simulated Connection Loss for node %d to partner %d (handle %d)" EOL, currentNode->GetNodeId(), currentNode->state.connections[i].partner->GetNodeId(), currentNode->state.connections[i].connectionHandle);
                     DisconnectSimulatorConnection(&currentNode->state.connections[i], BLE_HCI_CONNECTION_TIMEOUT, BLE_HCI_CONNECTION_TIMEOUT);
@@ -1524,7 +1536,7 @@ TerminalCommandHandlerReturnType CherrySim::TerminalCommandHandler(const std::ve
         else if (commandArgs.size() >= 3 && commandArgs[1] == "rees") {
             int handle = Utility::StringToI32(commandArgs[2].c_str());
             SoftdeviceConnection *conn = nullptr;
-            for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++)
+            for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++)
             {
                 if (currentNode->state.connections[i].connectionHandle == handle)
                 {
@@ -2387,7 +2399,14 @@ void CherrySim::ResetCurrentNode(RebootReason rebootReason, bool throwException,
     }
 
     //Disconnect all simulator connections to this node
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    u32 configuredConnectionCount = currentNode->state.configuredTotalConnectionCount;
+    if (configuredConnectionCount > SIM_MAX_CONNECTION_NUM)
+    {
+        configuredConnectionCount = SIM_MAX_CONNECTION_NUM;
+        SIMEXCEPTION(IllegalStateException);
+    }
+
+    for (u32 i = 0; i < configuredConnectionCount; i++) {
         SoftdeviceConnection* connection = &nodes[index].state.connections[i];
         DisconnectSimulatorConnection(connection, BLE_HCI_CONNECTION_TIMEOUT, BLE_HCI_CONNECTION_TIMEOUT);
     }
@@ -2644,7 +2663,7 @@ void CherrySim::ConnectMasterToSlave(NodeEntry* master, NodeEntry* slave)
     //Find out if the device has another free Peripheral connection available
     u8 activePeripheralConnCount = 0;
     SoftdeviceConnection* freeInConnection = nullptr;
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(slave); i++) {
         if (slave->state.connections[i].connectionActive && !slave->state.connections[i].isCentral) {
             activePeripheralConnCount++;
         }
@@ -2696,7 +2715,7 @@ void CherrySim::ConnectMasterToSlave(NodeEntry* master, NodeEntry* slave)
     u8 activeCentralConnCount = 0;
     SoftdeviceConnection* freeOutConnection = nullptr;
     u16 connIndex = 0;
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(master); i++) {
         if (master->state.connections[i].connectionActive && master->state.connections[i].isCentral) {
             activeCentralConnCount++;
         }
@@ -2915,7 +2934,7 @@ void CherrySim::SimulateConnections() {
     if (blockConnections) return;
 
     //Simulate sending data for each connection individually
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++) {
         SoftdeviceConnection* connection = &currentNode->state.connections[i];
         if (connection->connectionActive) {
 
@@ -3053,7 +3072,7 @@ void CherrySim::SimulateConnections() {
     }
 
     // Simulate Connection RSSI measurements
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++) {
         if (ShouldSimIvTrigger(5000)) {
             SoftdeviceConnection* connection = &currentNode->state.connections[i];
             if (connection->connectionActive && connection->rssiMeasurementActive) {
@@ -3075,7 +3094,7 @@ void CherrySim::SimulateConnections() {
 
     //Simulate Connection Loss every second
     if (simConfig.connectionTimeoutProbabilityPerSec != 0) {
-        for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+        for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++) {
             if (currentNode->state.connections[i].connectionActive) {
                 if (PSRNG(simConfig.connectionTimeoutProbabilityPerSec)) {
                     SIMSTATCOUNT("simulatedTimeouts");
@@ -3204,7 +3223,7 @@ void CherrySim::SimulateServiceDiscovery()
 
     SoftdeviceConnection * p_discoveryConnection = nullptr;
 
-    for (int i = 0; i < currentNode->state.configuredTotalConnectionCount; i++)
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++)
     {
         SoftdeviceConnection * p_temp = &currentNode->state.connections[i];
         if ((p_temp->connectionActive == true) &&
@@ -3339,7 +3358,7 @@ void CherrySim::SimulateBatteryUsage()
         currentNode->nanoAmperePerMsTotal += usagePerStepWithGivenDutyCycle;
     }
 
-    for (u32 i = 0; i < currentNode->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(currentNode); i++) {
         SoftdeviceConnection* conn = currentNode->state.connections + i;
         if (conn->connectionActive) {
             if (conn->connectionInterval == 100) {
@@ -3458,7 +3477,7 @@ void CherrySim::SimulateTimeslot() {
 
 void CherrySim::SimulateConnectionParameterUpdateRequestTimeout()
 {
-    for (int connIndex = 0; connIndex < currentNode->state.configuredTotalConnectionCount; ++connIndex)
+    for (u32 connIndex = 0; connIndex < GetSafeConfiguredTotalConnectionCount(currentNode); ++connIndex)
     {
         auto & connection = currentNode->state.connections[connIndex];
         // Skip connections that are not active.
@@ -3602,7 +3621,7 @@ void CherrySim::CheckMeshingConsistency()
     {
         nodes[i].state.validityClusterSize = 0;
 
-        for (u32 k = 0; k < currentNode->state.configuredTotalConnectionCount; k++) {
+        for (u32 k = 0; k < GetSafeConfiguredTotalConnectionCount(&nodes[i]); k++) {
             nodes[i].state.connections[k].validityClusterSizeToSend = 0;
         }
     }
@@ -3682,7 +3701,7 @@ void CherrySim::CheckMeshingConsistency()
     {
         NodeEntry* node = &nodes[i];
 
-        for (u32 k = 0; k < currentNode->state.configuredTotalConnectionCount; k++)
+        for (u32 k = 0; k < GetSafeConfiguredTotalConnectionCount(node); k++)
         {
             SoftdeviceConnection* sc = &(node->state.connections[k]);
             if (!sc->connectionActive) continue;
@@ -4192,7 +4211,7 @@ uint32_t CherrySim::CalculateReceptionProbabilityForAdvertisement(const NodeEntr
 }
 
 SoftdeviceConnection* CherrySim::FindConnectionByHandle(NodeEntry* node, int connectionHandle) {
-    for (u32 i = 0; i < node->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(node); i++) {
         if (node->state.connections[i].connectionActive && node->state.connections[i].connectionHandle == connectionHandle) {
             return &node->state.connections[i];
         }
@@ -4277,7 +4296,7 @@ NodeEntry* CherrySim::FindUniqueNodeByTerminalId(TerminalId terminalId)
 
 u8 CherrySim::GetNumSimConnections(const NodeEntry* node) {
     u8 count = 0;
-    for (u32 i = 0; i < node->state.configuredTotalConnectionCount; i++) {
+    for (u32 i = 0; i < GetSafeConfiguredTotalConnectionCount(node); i++) {
         if (node->state.connections[i].connectionActive) {
             count++;
         }

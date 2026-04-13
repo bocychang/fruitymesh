@@ -81,8 +81,20 @@ u8 TOTAL_NODE_NUM = -1;//nnber 注意 17
 u32 MultipleCount[100];
 u32 CollsndCount[100];
 u32 avgDelay[100];
-u32 meshHopCount[50];
+u32 meshHopCount[100];
 int rcvCount[100];
+u8 hopCountStartNode = 0;
+u8 hopCountVisitedCount = 0;
+bool hopCountResponseReceived[100];
+
+constexpr u8 HOPCOUNT_MAX_NEIGHBORS = 16;
+struct HopCountTopologyPayload
+{
+    u8 neighborCount;
+    NodeId neighbors[HOPCOUNT_MAX_NEIGHBORS];
+};
+u8 hopCountNeighborCount[100];
+NodeId hopCountNeighbors[100][HOPCOUNT_MAX_NEIGHBORS];
 
 int ssettime=-1; // ssettime 開關
 int adjust=-1; //調整誤差 開關
@@ -830,31 +842,79 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new:send hops to sink value to sender
             if(packet->actionType == (u8)NodeModuleTriggerActionMessages::HOP_COUNT){
 
-                u8 hopsToSink = 255; // Initialize to max
+                // u8 hopsToSink = 255; // Initialize to max
+                // Query this node's own shortest hop count to any sink.
+                u8 hopsToSink = GS->cm.GetMeshHopsToShortestSink(nullptr);
 
                 MeshConnections conn = GS->cm.GetMeshConnections(ConnectionDirection::INVALID);
                 trace("Number of mesh connections: %u" EOL, conn.count);
 
-                for (u32 i = 1; i <= conn.count; i++) {
-                    u8 hops = GS->cm.GetMeshHopsToShortestSink(conn.handles[i].GetConnection());
-                    trace("Connection %u has %d hops to sink" EOL, i, hops);
+                // Fallback: if local shortest-hop info is unknown, derive best candidate from neighbors.
+                if (hopsToSink == 255)
+                {
+                    for (u32 i = 0; i < conn.count; i++)
+                    {
+                        if (!conn.handles[i])
+                        {
+                            continue;
+                        }
 
-                    if (hops >= 0 && hops < hopsToSink) {
-                        hopsToSink = hops;
+                        const u8 neighborHops = GS->cm.GetMeshHopsToShortestSink(conn.handles[i].GetConnection());
+                        if (neighborHops < 255)
+                        {
+                            const u8 candidate = (neighborHops < 254) ? (u8)(neighborHops + 1) : 255;
+                            if (candidate < hopsToSink)
+                            {
+                                hopsToSink = candidate;
+                            }
+                        }
                     }
                 }
 
-                if (hopsToSink == 255) {
-                    hopsToSink = 0; // Fallback if no sink reachable
+                trace("Node shortest hops to sink: %u" EOL, hopsToSink);
+
+                HopCountTopologyPayload topologyPayload = {};
+                for (u32 i = 0; i < conn.count && topologyPayload.neighborCount < HOPCOUNT_MAX_NEIGHBORS; i++)
+                {
+                    if (!conn.handles[i] || !conn.handles[i].IsHandshakeDone())
+                    {
+                        continue;
+                    }
+                    const NodeId partnerId = conn.handles[i].GetPartnerId();
+                    if (partnerId == 0)
+                    {
+                        continue;
+                    }
+
+                     bool duplicate = false;
+                    for (u8 n = 0; n < topologyPayload.neighborCount; n++)
+                    {
+                        if (topologyPayload.neighbors[n] == partnerId)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate)
+                    {
+                        topologyPayload.neighbors[topologyPayload.neighborCount] = partnerId;
+                        topologyPayload.neighborCount++;
+                    }
                 }
+
+                // if (hopsToSink == 255) {
+                //     hopsToSink = 0; // Fallback if no sink reachable
+                // }
+                // Keep 255 as "unknown / unreachable" to avoid polluting statistics.
 
                 SendModuleActionMessage(
                     MessageType::MODULE_ACTION_RESPONSE,
                     packetHeader->sender,
                     (u8)NodeModuleActionResponseMessages::GET_HOPS_TO_SINK,
                     hopsToSink,
-                    nullptr,
-                    0,
+                    (u8*)&topologyPayload,
+                    sizeof(topologyPayload),
                     false
                 );
             }
@@ -1320,7 +1380,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 6;
+                TOTAL_NODE_NUM = 31;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -1824,33 +1884,185 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     GS->maxMeshHopCount = packet->requestHandle;
                 }
 
+                bool isNewSenderResponse = false;
+
                 if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
-                    meshHopCount[packetHeader->sender - 1] = packet->requestHandle;
+                    const u8 senderIdx = (u8)(packetHeader->sender - 1);
+                    meshHopCount[senderIdx] = packet->requestHandle;
+                    const u32 payloadLength = sendData->dataLength.GetRaw() >= SIZEOF_CONN_PACKET_MODULE
+                        ? sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE
+                        : 0;
+                    if (payloadLength >= sizeof(HopCountTopologyPayload))
+                    {
+                        const HopCountTopologyPayload* topologyPayload = (const HopCountTopologyPayload*)packet->data;
+                        const u8 idx = senderIdx;
+                        hopCountNeighborCount[idx] = topologyPayload->neighborCount <= HOPCOUNT_MAX_NEIGHBORS
+                            ? topologyPayload->neighborCount
+                            : HOPCOUNT_MAX_NEIGHBORS;
+
+                        for (u8 n = 0; n < HOPCOUNT_MAX_NEIGHBORS; n++)
+                        {
+                            hopCountNeighbors[idx][n] = (n < hopCountNeighborCount[idx])
+                                ? topologyPayload->neighbors[n]
+                                : 0;
+                        }
+                    }
+
+                    if (!hopCountResponseReceived[senderIdx])
+                    {
+                        hopCountResponseReceived[senderIdx] = true;
+                        isNewSenderResponse = true;
+                    }
                 }
 
-                if (packetHeader->sender < TOTAL_NODE_NUM){
-                    u32 nextNodeId = packetHeader->sender + 1;
-                    SendModuleActionMessage(
-                        MessageType::MODULE_TRIGGER_ACTION,
-                        nextNodeId,
-                        (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
-                        0,
-                        nullptr,
-                        0,
-                        false
-                    );
-                }else if (packetHeader->sender == TOTAL_NODE_NUM){
+                if (isNewSenderResponse && hopCountVisitedCount < UINT8_MAX)
+                {
+                    hopCountVisitedCount++;
+                }
+
+                 if (isNewSenderResponse && hopCountVisitedCount < TOTAL_NODE_NUM){
+                    NodeId nextNodeId = 0;
+                    for (u32 i = 0; i < TOTAL_NODE_NUM; i++)
+                    {
+                        if (!hopCountResponseReceived[i])
+                        {
+                            nextNodeId = (NodeId)(i + 1);
+                            break;
+                        }
+                    }
+
+                    if (nextNodeId != 0)
+                    {
+                        SendModuleActionMessage(
+                            MessageType::MODULE_TRIGGER_ACTION,
+                            nextNodeId,
+                            (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
+                            0,
+                            nullptr,
+                            0,
+                            false
+                        );
+                    }
+                }else if (isNewSenderResponse){
                     GS->avgMeshHopCount = 0.0;
                     u32 temp = 0;
-                    for (u32 i = 0; i < TOTAL_NODE_NUM; i++){
-                        temp += meshHopCount[i];
-                        trace("Node %u hopsToSink: %u" EOL, i + 1, meshHopCount[i]);
+                    u32 validCount = 0;
+                     u8 bfsNeighborCount[100];
+                    NodeId bfsNeighbors[100][HOPCOUNT_MAX_NEIGHBORS];
+                    for (u32 i = 0; i < 100; i++)
+                    {
+                        bfsNeighborCount[i] = hopCountNeighborCount[i] <= HOPCOUNT_MAX_NEIGHBORS
+                            ? hopCountNeighborCount[i]
+                            : HOPCOUNT_MAX_NEIGHBORS;
+
+                        for (u8 n = 0; n < HOPCOUNT_MAX_NEIGHBORS; n++)
+                        {
+                            bfsNeighbors[i][n] = (n < bfsNeighborCount[i])
+                                ? hopCountNeighbors[i][n]
+                                : 0;
+                        }
                     }
-                    GS->avgMeshHopCount = (float)temp / (float)TOTAL_NODE_NUM;
+
+                    // Make topology undirected to avoid one-sided reporting splitting connectivity.
+                    for (u32 i = 0; i < TOTAL_NODE_NUM; i++)
+                    {
+                        const NodeId srcNode = (NodeId)(i + 1);
+                        const u8 neighborCount = bfsNeighborCount[i] <= HOPCOUNT_MAX_NEIGHBORS
+                            ? bfsNeighborCount[i]
+                            : HOPCOUNT_MAX_NEIGHBORS;
+
+                        for (u8 n = 0; n < neighborCount; n++)
+                        {
+                            const NodeId dstNode = bfsNeighbors[i][n];
+                            if (dstNode == 0 || dstNode > TOTAL_NODE_NUM)
+                            {
+                                continue;
+                            }
+
+                            const u8 dstIdx = (u8)(dstNode - 1);
+                            bool hasReverse = false;
+                            for (u8 rn = 0; rn < bfsNeighborCount[dstIdx] && rn < HOPCOUNT_MAX_NEIGHBORS; rn++)
+                            {
+                                if (bfsNeighbors[dstIdx][rn] == srcNode)
+                                {
+                                    hasReverse = true;
+                                    break;
+                                }
+                            }
+
+                            if (!hasReverse && bfsNeighborCount[dstIdx] < HOPCOUNT_MAX_NEIGHBORS)
+                            {
+                                bfsNeighbors[dstIdx][bfsNeighborCount[dstIdx]] = srcNode;
+                                bfsNeighborCount[dstIdx]++;
+                            }
+                        }
+                    }
+
+                    i16 bfsDistance[100];
+                    for (u32 i = 0; i < 100; i++)
+                    {
+                        bfsDistance[i] = -1;
+                    }
+
+                    if (hopCountStartNode > 0 && hopCountStartNode <= TOTAL_NODE_NUM)
+                    {
+                        NodeId bfsQueue[100];
+                        u32 queueHead = 0;
+                        u32 queueTail = 0;
+
+                        bfsDistance[hopCountStartNode - 1] = 0;
+                        bfsQueue[queueTail++] = hopCountStartNode;
+
+                        while (queueHead < queueTail)
+                        {
+                            const NodeId current = bfsQueue[queueHead++];
+                            const i16 currentDistance = bfsDistance[current - 1];
+                            const u8 neighborCount = bfsNeighborCount[current - 1] <= HOPCOUNT_MAX_NEIGHBORS
+                                ? bfsNeighborCount[current - 1]
+                                : HOPCOUNT_MAX_NEIGHBORS;
+
+                            for (u8 n = 0; n < neighborCount; n++)
+                            {
+                                const NodeId neighbor = bfsNeighbors[current - 1][n];
+                                if (neighbor == 0 || neighbor > TOTAL_NODE_NUM)
+                                {
+                                    continue;
+                                }
+
+                                if (bfsDistance[neighbor - 1] == -1)
+                                {
+                                    bfsDistance[neighbor - 1] = currentDistance + 1;
+                                    bfsQueue[queueTail++] = neighbor;
+                                }
+                            }
+                        }
+                    }
+                    for (u32 i = 0; i < TOTAL_NODE_NUM; i++){
+                        if (bfsDistance[i] < 0)
+                        {
+                            trace("Node %u hopsToSink: unreachable" EOL, i + 1);
+                            continue;
+                        }
+                        const u32 hopToTarget = (u32)bfsDistance[i];
+                        temp += hopToTarget;
+                        validCount++;
+                        trace("Node %u hopsToSink: %u" EOL, i + 1, hopToTarget);
+
+                        if (hopToTarget > GS->maxMeshHopCount)
+                        {
+                            GS->maxMeshHopCount = hopToTarget;
+                        }
+                    }
+
+                     if (validCount > 0)
+                    {
+                        GS->avgMeshHopCount = (float)temp / (float)validCount;
+                    }
 
                     printf("avg hopsToSink: %.2f" EOL, GS->avgMeshHopCount);
                     trace("MAX hopsToSink: %u" EOL, GS->maxMeshHopCount);
                     trace("TOTAL_NODE_NUM: %u" EOL, TOTAL_NODE_NUM);
+                    trace("hopcount start node: %u" EOL, hopCountStartNode);
                 }
             }
             
@@ -2923,26 +3135,26 @@ joinMeBufferPacket* Node::DetermineBestClusterAsMaster()
 //Connect to big clusters but big clusters must connect nodes that are not able 
 u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 {
-    switch (configuration.nodeId){
-    case 1:
-        if (packet.payload.sender != 2) return 0;
-        break;
-    case 2:
-         if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
-        break;
-    case 3:
-         if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
-        break;  
-    case 4:
-        if (1) return 0;
-        break;
-    case 5:
-        if (1) return 0;
-        break;    
-    default:
-        if (1) return 0;
-        break;
-    }
+    // switch (configuration.nodeId){
+    // case 1:
+    //     if (packet.payload.sender != 2) return 0;
+    //     break;
+    // case 2:
+    //      if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
+    //     break;
+    // case 3:
+    //      if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
+    //     break;  
+    // case 4:
+    //     if (1) return 0;
+    //     break;
+    // case 5:
+    //     if (1) return 0;
+    //     break;    
+    // default:
+    //     if (1) return 0;
+    //     break;
+    // }
 
 
     //if(1) return 0;
@@ -4577,15 +4789,29 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                     TOTAL_NODE_NUM = 100;
                 }
 
+                 if (destinationNode == 0 || destinationNode > TOTAL_NODE_NUM)
+                {
+                    return TerminalCommandHandlerReturnType::WRONG_ARGUMENT;
+                }
+
                 for (int i = 0; i < TOTAL_NODE_NUM ; i++){
-                    meshHopCount[i] = 0;
+                    meshHopCount[i] = 255;
+                    hopCountNeighborCount[i] = 0;
+                    hopCountResponseReceived[i] = false;
+                    for (u8 n = 0; n < HOPCOUNT_MAX_NEIGHBORS; n++)
+                    {
+                        hopCountNeighbors[i][n] = 0;
+                    }
                 } 
+
+                hopCountStartNode = destinationNode;
+                hopCountVisitedCount = 0;
 
                 SendModuleActionMessage(
                     MessageType::MODULE_TRIGGER_ACTION,
-                    1,
+                    destinationNode,
                     (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
-                    1,
+                    destinationNode,
                     nullptr,
                     0,
                     false
