@@ -394,7 +394,7 @@ bool MeshConnection::SendData(BaseConnectionSendData* sendData, u8 const * data,
     if(sendData->deliveryOption != DeliveryOption::WRITE_CMD
         && sendData->deliveryOption != DeliveryOption::WRITE_REQ){
 
-        sendData->deliveryOption = DeliveryOption::WRITE_CMD;
+        // sendData->deliveryOption = DeliveryOption::WRITE_CMD;
     }
 
     //WARNING: Currently we only support WRITE_CMD to protect against SoftDevice faults

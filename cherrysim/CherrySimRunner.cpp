@@ -44,6 +44,8 @@
 
 #ifdef _MSC_VER
 #include <filesystem>
+#include <crtdbg.h>
+#include <cstdlib>
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -61,6 +63,16 @@ extern bool meshGwCommunication;
 
 #ifdef CHERRYSIM_RUNNER_ENABLED
 int main(int argc, char** argv) {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#endif
     printf("#################################################" EOL
            "#                  CherrySim                    #" EOL
            "#################################################" EOL
@@ -289,30 +301,29 @@ CherrySimRunnerConfig CherrySimRunner::CreateDefaultRunnerConfiguration()
 
 SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 {
-    SimConfiguration simConfig;
+     SimConfiguration simConfig;
 
     simConfig.seed = 1;
     simConfig.mapWidthInMeters = 20;
-    simConfig.mapHeightInMeters = 20;
+    simConfig.mapHeightInMeters = 40;
     simConfig.mapElevationInMeters = 1;
-    simConfig.simTickDurationMs = 1;
-
-    simConfig.terminalId = 4; //Enter -1 to disable, 0 for all nodes, or a specific id
+    simConfig.simTickDurationMs = 50;
+    simConfig.terminalId = 7; //Enter -1 to disable, 0 for all nodes, or a specific id
 
     //simConfig.nodeConfigName.insert({ "github_mesh_nrf52", 5 });//set Dev node, can be multiple nodes
     simConfig.nodeConfigName.insert({ "prod_sink_nrf52", 1});//set Sink node,only one sink node is allowed
-    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 30});//set Dev node, can be multiple nodes
+    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 10 });//set Dev node, can be multiple nodes
 
-    simConfig.simOtherDelay = 100000; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly //1
+    simConfig.simOtherDelay = 100000; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly
     simConfig.playDelay = 0; //Allows us to view the simulation slower than simulated, is added after each step
 
-    simConfig.interruptProbability = 0;
+    simConfig.interruptProbability = UINT32_MAX / 10;
 
     simConfig.connectionTimeoutProbabilityPerSec = 0;// UINT32_MAX * 0.00001; //Every minute or so: 0.00001, randomly generates timout events for connections and disconnects them;
     simConfig.sdBleGapAdvDataSetFailProbability = 0;// UINT32_MAX * 0.0001; //Simulate fails on setting adv Data in the softdevice
-    simConfig.sdBusyProbability = 0;// UINT32_MAX * 0.0001; //Simulates getting back busy errors from the softdevice
-    simConfig.simulateAsyncFlash = false; //Simulates asynchronous flash operations, rather then sending the ACK immediately
-    simConfig.asyncFlashCommitTimeProbability = 0;
+    simConfig.sdBusyProbability = UINT32_MAX / 100;// UINT32_MAX * 0.0001; //Simulates getting back busy errors from the softdevice
+    simConfig.simulateAsyncFlash = true; //Simulates asynchronous flash operations, rather then sending the ACK immediately
+    simConfig.asyncFlashCommitTimeProbability = ( UINT32_MAX / 10 ) * 9;
 
     simConfig.importFromJson = false; //Set to true in order to not generate nodes
     simConfig.siteJsonPath = "testsite.json";
@@ -322,7 +333,7 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 
     simConfig.rssiNoise = true;
 
-    simConfig.verboseCommands = false;
+    simConfig.verboseCommands = true;
     simConfig.enableSimStatistics = true;
 
     simConfig.fastLaneToSimTimeMs = 0;
@@ -351,7 +362,7 @@ void CherrySimRunner::Init()
 
     //We can now modify the nodes to use a different configuration
     //Set the first node to deviceType sink
-    sim->nodes[3].uicr.CUSTOMER[11] = (u32)DeviceType::SINK; //deviceType
+    sim->nodes[6].uicr.CUSTOMER[11] = (u32)DeviceType::SINK; //deviceType
         
     //Boot up all nodes
     for (u32 i = 0; i < sim->GetTotalNodes(); i++) {

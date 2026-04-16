@@ -89,6 +89,7 @@ u32 meshHopCount[100];
 int rcvCount[100];
 u8 hopCountStartNode = 0;
 u8 hopCountVisitedCount = 0;
+bool hopCountResponseReceived[100];
 
 constexpr u8 HOPCOUNT_MAX_NEIGHBORS = 16;
 struct HopCountTopologyPayload
@@ -98,29 +99,6 @@ struct HopCountTopologyPayload
 };
 u8 hopCountNeighborCount[100];
 NodeId hopCountNeighbors[100][HOPCOUNT_MAX_NEIGHBORS];
-
-static void ResetNodeRuntimeBuffers()
-{
-    TOTAL_NODE_NUM = 0;
-    root = 0;
-    init = -1;
-    numNodes = -1;
-    flag = 0;
-    counta = 0;
-    testdis = 0;
-
-    hopCountStartNode = 0;
-    hopCountVisitedCount = 0;
-
-    CheckedMemset(MultipleCount, 0, sizeof(MultipleCount));
-    CheckedMemset(CollsndCount, 0, sizeof(CollsndCount));
-    CheckedMemset(avgDelay, 0, sizeof(avgDelay));
-    CheckedMemset(meshHopCount, 0xFF, sizeof(meshHopCount));
-    CheckedMemset(rcvCount, 0, sizeof(rcvCount));
-
-    CheckedMemset(hopCountNeighborCount, 0, sizeof(hopCountNeighborCount));
-    CheckedMemset(hopCountNeighbors, 0, sizeof(hopCountNeighbors));
-}
 
 int ssettime=-1; // ssettime 開關
 int adjust=-1; //調整誤差 開關
@@ -149,7 +127,6 @@ void Node::Init()
 {
     //Load default configuration
     ResetToDefaultConfiguration();
-    ResetNodeRuntimeBuffers();
     InitializeHistoricalNeighborTable();
     isInit = true;
 }
@@ -1423,7 +1400,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 21;
+                TOTAL_NODE_NUM = 11;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -1927,16 +1904,19 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     GS->maxMeshHopCount = packet->requestHandle;
                 }
 
-                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
-                    meshHopCount[packetHeader->sender - 1] = packet->requestHandle;
+                bool isNewSenderResponse = false;
 
+                if (packetHeader->sender > 0 && packetHeader->sender <= 100) {
+
+                    const u8 senderIdx = (u8)(packetHeader->sender - 1);
+                    meshHopCount[senderIdx] = packet->requestHandle;
                     const u32 payloadLength = sendData->dataLength.GetRaw() >= SIZEOF_CONN_PACKET_MODULE
                         ? sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE
                         : 0;
                     if (payloadLength >= sizeof(HopCountTopologyPayload))
                     {
                         const HopCountTopologyPayload* topologyPayload = (const HopCountTopologyPayload*)packet->data;
-                        const u8 idx = (u8)(packetHeader->sender - 1);
+                        const u8 idx = senderIdx;
                         hopCountNeighborCount[idx] = topologyPayload->neighborCount <= HOPCOUNT_MAX_NEIGHBORS
                             ? topologyPayload->neighborCount
                             : HOPCOUNT_MAX_NEIGHBORS;
@@ -1948,29 +1928,46 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                                 : 0;
                         }
                     }
+
+                    if (!hopCountResponseReceived[senderIdx])
+                    {
+                        hopCountResponseReceived[senderIdx] = true;
+                        isNewSenderResponse = true;
+                    }
                 }
 
-                if (hopCountVisitedCount < UINT8_MAX)
+                 if (isNewSenderResponse && hopCountVisitedCount < UINT8_MAX)
                 {
                     hopCountVisitedCount++;
                 }
 
-                if (hopCountVisitedCount < TOTAL_NODE_NUM){
-                    u32 nextNodeId = (packetHeader->sender % TOTAL_NODE_NUM) + 1;
-                    SendModuleActionMessage(
-                        MessageType::MODULE_TRIGGER_ACTION,
-                        nextNodeId,
-                        (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
-                        0,
-                        nullptr,
-                        0,
-                        false
-                    );
-                }else{
+                 if (isNewSenderResponse && hopCountVisitedCount < TOTAL_NODE_NUM){
+                    NodeId nextNodeId = 0;
+                    for (u32 i = 0; i < TOTAL_NODE_NUM; i++)
+                    {
+                        if (!hopCountResponseReceived[i])
+                        {
+                            nextNodeId = (NodeId)(i + 1);
+                            break;
+                        }
+                    }
+
+                    if (nextNodeId != 0)
+                    {
+                        SendModuleActionMessage(
+                            MessageType::MODULE_TRIGGER_ACTION,
+                            nextNodeId,
+                            (u8)NodeModuleTriggerActionMessages::HOP_COUNT,
+                            0,
+                            nullptr,
+                            0,
+                            false
+                        );
+                    }
+                }else if (isNewSenderResponse){
                     GS->avgMeshHopCount = 0.0;
                     u32 temp = 0;
                     u32 validCount = 0;
-
                     u8 bfsNeighborCount[100];
                     NodeId bfsNeighbors[100][HOPCOUNT_MAX_NEIGHBORS];
                     for (u32 i = 0; i < 100; i++)
@@ -2814,7 +2811,7 @@ void Node::UpdateJoinMePacket()
 
     //test mesh finish time
 
-    if(clusterSize == 21){
+    if(clusterSize == 11){
         trace("##############test mesh finish time##############"EOL);
         trace("Delaytimer : %u Utc : %u " EOL, GS->delaytimer, GS->timeManager.GetUtcTime());
         trace("##############test mesh finish time##############"EOL);
@@ -3057,68 +3054,6 @@ Node::DecisionStruct Node::DetermineBestClusterAvailable(void)
 
             result.result = DecisionResult::CONNECT_AS_SLAVE;
             result.preferredPartner = bestClusterAsSlave->payload.sender;
-            return result;
-        }
-
-        // Fallback merge path (does not change scoring formula):
-        // if no slave candidate is found by scoring, still allow merge into a clearly
-        // larger nearby cluster to avoid long-term deadlocks.
-        joinMeBufferPacket* fallbackBiggerCluster = nullptr;
-        for (u32 i = 0; i < joinMePackets.size(); i++)
-        {
-            joinMeBufferPacket* candidate = &joinMePackets[i];
-            if (candidate->payload.sender == 0) continue;
-            if (GS->appTimerDs - candidate->receivedTimeDs > MAX_JOIN_ME_PACKET_AGE_DS) continue;
-            if (candidate->payload.clusterId == this->clusterId) continue;
-            if (candidate->payload.clusterSize <= GetClusterSize()) continue;
-            if (candidate->rssi < STABLE_CONNECTION_RSSI_THRESHOLD) continue;
-
-            if (fallbackBiggerCluster == nullptr
-                || candidate->payload.clusterSize > fallbackBiggerCluster->payload.clusterSize
-                || (candidate->payload.clusterSize == fallbackBiggerCluster->payload.clusterSize
-                    && candidate->payload.freeMeshOutConnections > fallbackBiggerCluster->payload.freeMeshOutConnections)
-                || (candidate->payload.clusterSize == fallbackBiggerCluster->payload.clusterSize
-                    && candidate->payload.freeMeshOutConnections == fallbackBiggerCluster->payload.freeMeshOutConnections
-                    && candidate->rssi > fallbackBiggerCluster->rssi))
-            {
-                fallbackBiggerCluster = candidate;
-            }
-        }
-
-        if (fallbackBiggerCluster != nullptr)
-        {
-            currentAckId = fallbackBiggerCluster->payload.clusterId;
-            logt("DECISION", "Fallback merge to bigger cluster %u via node %u", currentAckId, fallbackBiggerCluster->payload.sender);
-
-            if (GS->config.meshMaxInConnections == 1)
-            {
-                bool freshConnectionAvailable = false;
-                BaseConnections conns = GS->cm.GetBaseConnections(ConnectionDirection::INVALID);
-                for (u32 i = 0; i < conns.count; i++)
-                {
-                    BaseConnectionHandle conn = conns.handles[i];
-                    if (conn)
-                    {
-                        if (conn.GetCreationTimeDs() + Conf::meshHandshakeTimeoutDs > GS->appTimerDs)
-                        {
-                            freshConnectionAvailable = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!freshConnectionAvailable && GS->cm.freeMeshInConnections == 0)
-                {
-                    GS->cm.ForceDisconnectOtherMeshConnections(nullptr, AppDisconnectReason::SHOULD_WAIT_AS_SLAVE);
-                    SetClusterSize(1);
-                    clusterId = GenerateClusterID();
-                }
-            }
-
-            UpdateJoinMePacket();
-
-            result.result = DecisionResult::CONNECT_AS_SLAVE;
-            result.preferredPartner = fallbackBiggerCluster->payload.sender;
             return result;
         }
 
@@ -5196,6 +5131,7 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 for (int i = 0; i < TOTAL_NODE_NUM ; i++){
                     meshHopCount[i] = 255;
                     hopCountNeighborCount[i] = 0;
+                    hopCountResponseReceived[i] = false;
                     for (u8 n = 0; n < HOPCOUNT_MAX_NEIGHBORS; n++)
                     {
                         hopCountNeighbors[i][n] = 0;
