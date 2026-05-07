@@ -1218,9 +1218,15 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     // 只在達到50%後才累加統計數據，且 rcvCount 未達上限時才繼續累加（防止 PDR > 100%）
                     if (generateLoadSinkRecordingStarted[packetHeader->sender - 1]) {
                         u32 maxRcvCount = generateLoadExpectedPerSender / 2;
+                        // 過濾掉50%邊界之前的延遲到達封包（防止重傳的舊封包污染統計）
+                        // 只有 seqNum > threshold 的封包才屬於後50%的記錄窗口
+                        u32 seqThreshold = generateLoadExpectedPerSender / 2;
+                        if (hasSeqNum && receivedSeqNum <= seqThreshold) {
+                            // 這是50%邊界之前的延遲到達封包，跳過不計入統計
+                        }
                         
                         // 檢查是否已達到接收數量上限
-                        if (rcvCount[packetHeader->sender - 1] < maxRcvCount) {
+                        else if (rcvCount[packetHeader->sender - 1] < maxRcvCount) {
                             avgDelay[packetHeader->sender - 1] += packetDelay;
                             rcvCount[packetHeader->sender - 1] += 1;
                             GS->rcvCount += 1; // 累加全局接收计数
