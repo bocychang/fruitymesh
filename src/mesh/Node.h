@@ -51,6 +51,7 @@ constexpr int MAX_RAW_DATA_CHUNK_SIZE = 60;
 constexpr int TIME_BEFORE_DISCOVERY_MESSAGE_SENT_SEC = 30;
 
 constexpr u8 NODE_MODULE_CONFIG_VERSION = 2;
+constexpr u8 HISTORICAL_NEIGHBOR_MAX_ENTRIES = 3;
 
 typedef struct
 {
@@ -112,23 +113,23 @@ enum class HistoricalNeighborRole : u8
 #pragma pack(1)
 struct HistoricalNeighborEntry
 {
-    NodeId nodeId;
-    u8 lastRole;
-    i8 avgRSSI;
-    i8 lastRSSI;
-    i16 hopsToSink;
-    u8 successCount;
-    u8 failureCount;
-    u32 lastValidTimeDs;
-    u8 validFlag;
-    u32 checksum;
+    NodeId nodeId;//鄰居識別碼
+    u8 lastRole; //上次連線角色（Parent 或 Child）
+    i8 avgRSSI; //歷史平均訊號強度（EWMA, α=0.75）
+    i8 lastRSSI; //最後一次觀測的訊號強度
+    i16 hopsToSink; //至 Sink 的跳數  
+    u8 successCount; //成功連線次數累計
+    u8 failureCount; //連續失敗次數
+    u32 lastValidTimeDs; //上次有效連線時間戳（單位 decisecond）
+    u8 validFlag; //Entry是否有效
+    u32 checksum; //CRC32 完整性校驗碼
 };
 
 struct HistoricalNeighborTable
 {
-    u8 version;
-    u8 entryCount;
-    HistoricalNeighborEntry entries[3];
+    u8 version;  //資料格式版本號，用於載入時檢查相容性
+    u8 entryCount; //目前entry已佔用的條目數量
+    HistoricalNeighborEntry entries[HISTORICAL_NEIGHBOR_MAX_ENTRIES]; //三筆歷史鄰居資料
 };
 #pragma pack(pop)
 
@@ -444,7 +445,7 @@ private:
         const HistoricalNeighborEntry* FindHistoricalNeighborEntry(NodeId nodeId) const;
         void UpsertHistoricalNeighborEntry(NodeId nodeId, HistoricalNeighborRole role, i8 rssi, i16 hopsToSink, bool success);
         void PersistHistoricalNeighborTableIfNeeded(bool force);
-        i32 GetHistoricalRankingBonus(const joinMeBufferPacket& packet) const;
+        i32 GetHistoricalRankingBonus(const joinMeBufferPacket& packet, HistoricalNeighborRole expectedRole) const;
 
     public:
         // 實際發送計數（包含重傳）- 由 BaseConnection 累加，通過 COLLECT_MIXED_DATA 收集

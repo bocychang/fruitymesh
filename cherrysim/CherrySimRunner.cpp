@@ -312,7 +312,7 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 
     //simConfig.nodeConfigName.insert({ "github_mesh_nrf52", 5 });//set Dev node, can be multiple nodes
     simConfig.nodeConfigName.insert({ "prod_sink_nrf52", 1});//set Sink node,only one sink node is allowed
-    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 10 });//set Dev node, can be multiple nodes
+    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 30 });//set Dev node, can be multiple nodes
 
     simConfig.simOtherDelay = 100000; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly
     simConfig.playDelay = 0; //Allows us to view the simulation slower than simulated, is added after each step

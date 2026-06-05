@@ -2817,7 +2817,7 @@ void Node::UpdateJoinMePacket()
 
     //test mesh finish time
 
-    if(clusterSize == 11){
+    if(clusterSize == 31){
         trace("##############test mesh finish time##############"EOL);
         trace("Delaytimer : %u Utc : %u " EOL, GS->delaytimer, GS->timeManager.GetUtcTime());
         trace("##############test mesh finish time##############"EOL);
@@ -2962,12 +2962,7 @@ Node::DecisionStruct Node::DetermineBestClusterAvailable(void)
     DecisionStruct result = { DecisionResult::NO_NODES_FOUND, 0, 0 };
 
     // new: 取得當前設備類型
-    DeviceConfiguration config;
-    ErrorType err = FruityHal::GetDeviceConfiguration(config);
-    DeviceType deviceType;
-    if (err == ErrorType::SUCCESS) {
-        deviceType = static_cast<DeviceType>(config.deviceType);
-    }
+    const DeviceType deviceType = GET_DEVICE_TYPE();
 
     // new: 如果是 Sink，優先建立 Mesh (當 Master)
     if (deviceType == DeviceType::SINK && GS->cm.freeMeshOutConnections > 0) {
@@ -3214,12 +3209,6 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
     //if (packet.payload.sender != 2)  return 0; 
     
     //new: 取得當前設備類型
-    DeviceConfiguration config;
-    ErrorType err = FruityHal::GetDeviceConfiguration(config);
-    DeviceType deviceType;
-    if (err == ErrorType::SUCCESS)
-    deviceType = static_cast<DeviceType>(config.deviceType);
-
     //PrintDeviceType(packet);
 
     //If the packet is too old, filter it out
@@ -3269,9 +3258,9 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
     //new: add sink node weight score
     // u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore - (u32)(packet.payload.hopsToSink) * 1000;
 
-    u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore;
+    u32 score = (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
-    i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    i32 historicalBonus = GetHistoricalRankingBonus(packet, HistoricalNeighborRole::CHILD);
     if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
     {
         historicalBonus = 0;
@@ -3314,16 +3303,10 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 u32 Node::CalculateClusterScoreAsSlave(const joinMeBufferPacket& packet) const
 { 
     //new: 取得當前設備類型
-    DeviceConfiguration config;
-    ErrorType err = FruityHal::GetDeviceConfiguration(config);
-    DeviceType deviceType;
-    if (err == ErrorType::SUCCESS)
-    deviceType = static_cast<DeviceType>(config.deviceType); 
-    
-    if (deviceType == DeviceType::SINK) return 0;
+    if (GET_DEVICE_TYPE() == DeviceType::SINK) return 0;
 
     //new: 如果是 Sink，則不考慮連接
-    if (packet.payload.hopsToSink < 0) return 0;
+    if (packet.payload.hopsToSink == UINT16_MAX) return 0;
     //new: 如果freeMeshOutConnections == 0，則不考慮連接
     if (packet.payload.freeMeshOutConnections == 0) return 0;
 
@@ -3358,12 +3341,12 @@ u32 Node::CalculateClusterScoreAsSlave(const joinMeBufferPacket& packet) const
     }
     // //original code
     // score += (u32)(packet.payload.clusterSize) * 10000 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
-    //new: add tree balance code
+    //new: add tree balance code INIT_STATE
     // score += (u32)(packet.payload.hopsToSink) * 1000 + (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
     score += (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
-    i32 historicalBonus = GetHistoricalRankingBonus(packet);
+    i32 historicalBonus = GetHistoricalRankingBonus(packet, HistoricalNeighborRole::PARENT);
     if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
     {
         historicalBonus = 0;
@@ -3518,7 +3501,7 @@ void Node::GapAdvertisementMessageHandler(const FruityHal::GapAdvertisementRepor
 
                 // Fast path: if historical data strongly favors this candidate,
                 // trigger the decision window immediately instead of waiting for the normal cadence.
-                const i32 historicalBonus = GetHistoricalRankingBonus(*targetBuffer);
+                const i32 historicalBonus = GetHistoricalRankingBonus(*targetBuffer, HistoricalNeighborRole::UNKNOWN);
                 if (historicalBonus >= historicalFastDecisionThreshold)
                 {
                     noNodesFoundCounter = 0;
@@ -4244,12 +4227,12 @@ void Node::LoadHistoricalNeighborTableFromStorage()
         return;
     }
 
-    if (loaded.entryCount > 3)
+    if (loaded.entryCount > HISTORICAL_NEIGHBOR_MAX_ENTRIES)
     {
         return;
     }
 
-    for (u32 i = 0; i < 3; i++)
+    for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
     {
         if (loaded.entries[i].nodeId == 0)
         {
@@ -4270,7 +4253,7 @@ void Node::LoadHistoricalNeighborTableFromStorage()
 u8 Node::CountHistoricalNeighborEntries(const HistoricalNeighborTable& table)
 {
     u8 count = 0;
-    for (u32 i = 0; i < 3; i++)
+    for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
     {
         if (table.entries[i].nodeId != 0)
         {
@@ -4305,7 +4288,7 @@ bool Node::IsHistoricalNeighborEntryValidForRanking(const HistoricalNeighborEntr
 
 HistoricalNeighborEntry* Node::FindHistoricalNeighborEntry(NodeId nodeId)
 {
-    for (u32 i = 0; i < 3; i++)
+    for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
     {
         if (historicalNeighborTable.entries[i].nodeId == nodeId)
         {
@@ -4317,7 +4300,7 @@ HistoricalNeighborEntry* Node::FindHistoricalNeighborEntry(NodeId nodeId)
 
 const HistoricalNeighborEntry* Node::FindHistoricalNeighborEntry(NodeId nodeId) const
 {
-    for (u32 i = 0; i < 3; i++)
+    for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
     {
         if (historicalNeighborTable.entries[i].nodeId == nodeId)
         {
@@ -4337,7 +4320,7 @@ void Node::UpsertHistoricalNeighborEntry(NodeId nodeId, HistoricalNeighborRole r
     HistoricalNeighborEntry* entry = FindHistoricalNeighborEntry(nodeId);
     if (entry == nullptr)
     {
-        for (u32 i = 0; i < 3; i++)
+        for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
         {
             if (historicalNeighborTable.entries[i].nodeId == 0)
             {
@@ -4352,7 +4335,7 @@ void Node::UpsertHistoricalNeighborEntry(NodeId nodeId, HistoricalNeighborRole r
         // Replace the weakest entry if table is full.
         u32 weakestIndex = 0;
         i32 weakestScore = INT32_MAX;
-        for (u32 i = 0; i < 3; i++)
+        for (u32 i = 0; i < HISTORICAL_NEIGHBOR_MAX_ENTRIES; i++)
         {
             const HistoricalNeighborEntry& candidate = historicalNeighborTable.entries[i];
             const i32 score = (i32)candidate.successCount - (i32)(candidate.failureCount * 2);
@@ -4434,7 +4417,7 @@ void Node::PersistHistoricalNeighborTableIfNeeded(bool force)
     }
 }
 
-i32 Node::GetHistoricalRankingBonus(const joinMeBufferPacket& packet) const
+i32 Node::GetHistoricalRankingBonus(const joinMeBufferPacket& packet, HistoricalNeighborRole expectedRole) const
 {
     const HistoricalNeighborEntry* entry = FindHistoricalNeighborEntry(packet.payload.sender);
     if (entry == nullptr) return 0;
@@ -4450,7 +4433,9 @@ i32 Node::GetHistoricalRankingBonus(const joinMeBufferPacket& packet) const
         bonus -= (i32)entry->hopsToSink * 120;
     }
 
-    if ((HistoricalNeighborRole)entry->lastRole == HistoricalNeighborRole::PARENT)
+    // Role consistency bonus: only add if last role matches expected role
+    if (expectedRole != HistoricalNeighborRole::UNKNOWN
+        && (HistoricalNeighborRole)entry->lastRole == expectedRole)
     {
         bonus += 250;
     }
