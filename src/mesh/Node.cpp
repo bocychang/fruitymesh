@@ -3258,7 +3258,9 @@ u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
     //new: add sink node weight score
     // u32 score =  (u32)(packet.payload.freeMeshOutConnections) + rssiScore - (u32)(packet.payload.hopsToSink) * 1000;
 
-    u32 score = (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
+    u32 score = (u32)(packet.payload.freeMeshInConnections) * 100
+        + (u32)(packet.payload.freeMeshOutConnections) * 100
+        + rssiScore;
 
     i32 historicalBonus = GetHistoricalRankingBonus(packet, HistoricalNeighborRole::CHILD);
     if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
@@ -3344,7 +3346,9 @@ u32 Node::CalculateClusterScoreAsSlave(const joinMeBufferPacket& packet) const
     //new: add tree balance code INIT_STATE
     // score += (u32)(packet.payload.hopsToSink) * 1000 + (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
 
-    score += (u32)(packet.payload.clusterSize) * 100 + (u32)(packet.payload.freeMeshOutConnections) * 100 + rssiScore;
+    score += (u32)(packet.payload.clusterSize) * 100
+        + (u32)(packet.payload.freeMeshOutConnections) * 100
+        + rssiScore;
 
     i32 historicalBonus = GetHistoricalRankingBonus(packet, HistoricalNeighborRole::PARENT);
     if (noNodesFoundCounter >= historicalPenaltyBypassNoNodeThreshold && historicalBonus < 0)
@@ -4423,8 +4427,12 @@ i32 Node::GetHistoricalRankingBonus(const joinMeBufferPacket& packet, Historical
     if (entry == nullptr) return 0;
     if (!IsHistoricalNeighborEntryValidForRanking(*entry)) return 0;
 
+    const u8 effectiveSuccessCount = entry->successCount > HISTORICAL_NEIGHBOR_SUCCESS_SCORE_CAP
+        ? HISTORICAL_NEIGHBOR_SUCCESS_SCORE_CAP
+        : entry->successCount;
+
     i32 bonus = 0;
-    bonus += (i32)entry->successCount * 200;
+    bonus += (i32)effectiveSuccessCount * 200;
     bonus -= (i32)entry->failureCount * 300;
     bonus += ((i32)entry->avgRSSI + 100) * 8;
 

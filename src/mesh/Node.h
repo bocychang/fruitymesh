@@ -429,6 +429,7 @@ private:
         static constexpr u32 HISTORICAL_NEIGHBOR_CACHE_TTL_DS = SEC_TO_DS(60 * 30);
         static constexpr u8 HISTORICAL_NEIGHBOR_FAIL_THRESHOLD = 3;
         static constexpr u32 HISTORICAL_NEIGHBOR_MIN_PERSIST_INTERVAL_DS = SEC_TO_DS(30);
+        static constexpr u8 HISTORICAL_NEIGHBOR_SUCCESS_SCORE_CAP = 5; // Maximum success count considered for scoring to prevent excessive influence of very successful neighbors
 
         HistoricalNeighborTable historicalNeighborTable = {};
         bool historicalNeighborDirty = false;
