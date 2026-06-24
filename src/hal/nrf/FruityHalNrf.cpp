@@ -1879,7 +1879,7 @@ ErrorType FruityHal::BleGattWrite(u16 connHandle, BleGattWriteParams const & par
 //new 
     ConnPacketModule* outPacket = (ConnPacketModule*)params.p_data;
  
-    if (outPacket->actionType == 5) {
+    if (outPacket->actionType == 5 || outPacket->actionType == 30) {
         
         errTime=GS->delaytimer-Ctime; //errTime
 

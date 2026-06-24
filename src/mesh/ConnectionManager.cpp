@@ -613,7 +613,7 @@ ErrorTypeUnchecked ConnectionManager::SendModuleActionMessage(MessageType messag
     u32 packetgenerateTime = GS->delaytimer;
 
     //new
-    if (actionType == 5) //GENERATE_LOAD_CHUNK
+    if (actionType == 5 || actionType == 30) //GENERATE_LOAD_CHUNK / GENERATE_LOAD_MEDIUM_CHUNK
     {
         outPacket->DirectionSet = false;
         outPacket->Currdirection = 0;
@@ -886,7 +886,7 @@ void ConnectionManager::BroadcastMeshData(const BaseConnection* ignoreConnection
             if (conn.handles[i] && conn.handles[i].GetConnection() != ignoreConnection) {
 
                 //new There's no need to broadcast; just send the packet to the root.
-                if (outPacket->actionType == 5 && conn.handles[i].GetPartnerId() != GS->node.parent) continue;
+                if ((outPacket->actionType == 5 || outPacket->actionType == 30) && conn.handles[i].GetPartnerId() != GS->node.parent) continue;
 
                 sendData->characteristicHandle = ((MeshConnection*)conn.handles[i].GetConnection())->partnerWriteCharacteristicHandle;
                 ((MeshConnection*)conn.handles[i].GetConnection())->SendData(sendData, data);

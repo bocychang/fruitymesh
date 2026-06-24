@@ -305,25 +305,25 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 
     simConfig.seed = 1;
     simConfig.mapWidthInMeters = 20;
-    simConfig.mapHeightInMeters = 40;
+    simConfig.mapHeightInMeters = 20;
     simConfig.mapElevationInMeters = 1;
-    simConfig.simTickDurationMs = 50;
-    simConfig.terminalId = 7; //Enter -1 to disable, 0 for all nodes, or a specific id
+    simConfig.simTickDurationMs = 1;
+    simConfig.terminalId = 1; //Enter -1 to disable, 0 for all nodes, or a specific id
 
     //simConfig.nodeConfigName.insert({ "github_mesh_nrf52", 5 });//set Dev node, can be multiple nodes
     simConfig.nodeConfigName.insert({ "prod_sink_nrf52", 1});//set Sink node,only one sink node is allowed
-    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 30 });//set Dev node, can be multiple nodes
+    simConfig.nodeConfigName.insert({ "prod_mesh_nrf52", 5 });//set Dev node, can be multiple nodes
 
     simConfig.simOtherDelay = 100000; // Enter 1 - 100000 to send sim_other message only each ... simulation steps, this increases the speed significantly
     simConfig.playDelay = 0; //Allows us to view the simulation slower than simulated, is added after each step
 
-    simConfig.interruptProbability = UINT32_MAX / 10;
+    simConfig.interruptProbability = 0;
 
     simConfig.connectionTimeoutProbabilityPerSec = 0;// UINT32_MAX * 0.00001; //Every minute or so: 0.00001, randomly generates timout events for connections and disconnects them;
     simConfig.sdBleGapAdvDataSetFailProbability = 0;// UINT32_MAX * 0.0001; //Simulate fails on setting adv Data in the softdevice
-    simConfig.sdBusyProbability = UINT32_MAX / 100;// UINT32_MAX * 0.0001; //Simulates getting back busy errors from the softdevice
-    simConfig.simulateAsyncFlash = true; //Simulates asynchronous flash operations, rather then sending the ACK immediately
-    simConfig.asyncFlashCommitTimeProbability = ( UINT32_MAX / 10 ) * 9;
+    simConfig.sdBusyProbability = 0;// UINT32_MAX * 0.0001; //Simulates getting back busy errors from the softdevice
+    simConfig.simulateAsyncFlash = false; //Simulates asynchronous flash operations, rather then sending the ACK immediately
+    simConfig.asyncFlashCommitTimeProbability = 0;
 
     simConfig.importFromJson = false; //Set to true in order to not generate nodes
     simConfig.siteJsonPath = "testsite.json";
@@ -331,7 +331,7 @@ SimConfiguration CherrySimRunner::CreateDefaultSimConfiguration()
 
     simConfig.defaultNetworkId = 10;
 
-    simConfig.rssiNoise = true;
+    simConfig.rssiNoise = false;
 
     simConfig.verboseCommands = true;
     simConfig.enableSimStatistics = true;
@@ -362,7 +362,7 @@ void CherrySimRunner::Init()
 
     //We can now modify the nodes to use a different configuration
     //Set the first node to deviceType sink
-    sim->nodes[6].uicr.CUSTOMER[11] = (u32)DeviceType::SINK; //deviceType
+    sim->nodes[0].uicr.CUSTOMER[11] = (u32)DeviceType::SINK; //deviceType
         
     //Boot up all nodes
     for (u32 i = 0; i < sim->GetTotalNodes(); i++) {

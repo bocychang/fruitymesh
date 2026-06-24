@@ -200,13 +200,13 @@ void BaseConnection::FillTransmitBuffers()
         ConnPacketModule* outPacket = (ConnPacketModule*)data;
         if (packetHeader->messageType == MessageType::MODULE_TRIGGER_ACTION) {
             ConnPacketModule const* packet = (ConnPacketModule const*)packetHeader;
-            if (packet->actionType == 5) { // GENERATE_LOAD_CHUNK
+            if (packet->actionType == 5 || packet->actionType == 30) { // GENERATE_LOAD_CHUNK / GENERATE_LOAD_MEDIUM_CHUNK
                 outPacket->Currdirection= (direction == ConnectionDirection::DIRECTION_IN) ? 1 : 0;
                 
                 // 統計實際發送數（包含重傳）- 累加到 ActualSent 計數器
                 // 這些計數器會通過 COLLECT_MIXED_DATA 機制傳送給 sink
                 const MessageLength payloadLength = packetLength - SIZEOF_CONN_PACKET_MODULE;
-                if (payloadLength > 0) {
+                if (packet->actionType == 5 && payloadLength > 0) {
                     u8 firstByte = packet->data[0];
                     
                     if ((firstByte & 0xF0) == 0xF0) {

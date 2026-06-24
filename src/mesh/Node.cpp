@@ -958,9 +958,48 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 trace("DEBUG: Received START_GENERATE_LOAD, payloadLength=%u, sizeof(GenerateLoadMixedMessage)=%u" EOL, 
                     payloadLength, sizeof(GenerateLoadMixedMessage));
                 
-                // 檢查是否為隨機比例模式（使用特殊 requestHandle=0xFC）
-                if (packet->requestHandle == 0xFC && payloadLength >= sizeof(GenerateLoadRandomRatioMessage)) {
-                    // 隨機比例模式
+                // Medium queue mode: no priority marker in the payload, sequence number starts at byte 0.
+                if (packet->requestHandle == 0xFB && payloadLength >= sizeof(GenerateLoadMediumMessage)) {
+                    GenerateLoadMediumMessage const * message = (GenerateLoadMediumMessage const *)packet->data;
+                    u8 multiplier = message->requestHandle;
+                    if (multiplier == 0) multiplier = 1;
+
+                    generateLoadTarget = message->target;
+                    generateLoadPayloadSize = message->size;
+                    generateLoadMessagesLeft = message->amount * multiplier;
+                    generateLoadTimeBetweenMessagesDs = message->timeBetweenMessagesDs;
+                    generateLoadPriority = 2;
+                    generateLoadWithPriorityFlag = false;
+                    generateLoadMixedMode = false;
+                    generateLoadRandomRatioMode = false;
+                    generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_MEDIUM_CHUNK;
+                    generateLoadRequestHandle = 0;
+
+                    generateLoadHighSent = 0;
+                    generateLoadLowSent = 0;
+                    generateLoadHighActualSent = 0;
+                    generateLoadLowActualSent = 0;
+
+                    generateLoadTotalMessages = message->amount * multiplier;
+                    generateLoadSentCount = 0;
+                    generateLoadRecordingStarted = false;
+
+                    GS->CollsndCount = 0;
+                    GS->MultipleCount = 0;
+                    GS->MultipleUnit = multiplier;
+
+                    trace("DEBUG: multi_generate_load_medium - MultipleUnit=%u, amount=%u, total=%u" EOL,
+                        multiplier, message->amount, generateLoadMessagesLeft);
+
+                    logt("NODE", "Generating MEDIUM load. Target: %u size: %u amount: %u interval: %u multiplier: %u",
+                        message->target,
+                        message->size,
+                        message->amount * multiplier,
+                        message->timeBetweenMessagesDs,
+                        multiplier);
+                }
+                // Random ratio mode (requestHandle=0xFC).
+                else if (packet->requestHandle == 0xFC && payloadLength >= sizeof(GenerateLoadRandomRatioMessage)) {
                     GenerateLoadRandomRatioMessage const * message = (GenerateLoadRandomRatioMessage const *)packet->data;
                     generateLoadTarget = message->target;
                     generateLoadPayloadSize = message->size;
@@ -973,6 +1012,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadRandomRatioMode = true;
                     generateLoadWithPriorityFlag = true;
                     generateLoadMixedMode = false; // 清除混合交錯模式
+                    generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK;
                     generateLoadRandomHighPercentage = message->highPercentage;
                     
                     // 初始化計數器
@@ -1022,6 +1062,8 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     // 設定混合模式參數
                     generateLoadMixedMode = true;
                     generateLoadWithPriorityFlag = true;
+                    generateLoadRandomRatioMode = false;
+                    generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK;
                     generateLoadHighTarget = message->highAmount * multiplier;  // 乘以 multiplier
                     generateLoadLowTarget = message->lowAmount * multiplier;    // 乘以 multiplier
                     generateLoadHighSent = 0;
@@ -1060,6 +1102,8 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPriority = message->priority; // 保存 priority
                     generateLoadWithPriorityFlag = true; // 设置标志
                     generateLoadMixedMode = false; // 清除混合模式
+                    generateLoadRandomRatioMode = false;
+                    generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK;
                     generateLoadRequestHandle = 0;
                     
                     GS->CollsndCount = 0;
@@ -1093,6 +1137,8 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                     generateLoadPriority = 3; // Default to LOW priority
                     generateLoadWithPriorityFlag = false; // 清除标志
                     generateLoadMixedMode = false; // 清除混合模式
+                    generateLoadRandomRatioMode = false;
+                    generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK;
                     generateLoadRequestHandle = 0;
                     
                     // 設定50%過濾參數
@@ -1126,7 +1172,8 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 );
             }
 
-            else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK) {
+            else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK
+                || packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_MEDIUM_CHUNK) {
                 u8 const * payload = packet->data;
                 bool payloadCorrect = true;
                 const u8 payloadLength = sendData->dataLength.GetRaw() - SIZEOF_CONN_PACKET_MODULE;
@@ -1138,7 +1185,9 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
                 u32 receivedSeqNum = 0;
                 bool hasSeqNum = false;
                 
-                if (payloadLength > 0 && (payload[0] & 0xF0) == generateLoadPriorityMarker) {
+                if (packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK
+                    && payloadLength > 0
+                    && (payload[0] & 0xF0) == generateLoadPriorityMarker) {
                     hasPriorityMarker = true;
                     receivedPriority = payload[0] & 0x0F;
                     startIdx = 1;
@@ -1406,7 +1455,7 @@ void Node::MeshMessageReceivedHandler(BaseConnection* connection, BaseConnection
             //new find_degree
             else if (packet->actionType == (u8)NodeModuleTriggerActionMessages::FIND_DEGREE)
             {
-                TOTAL_NODE_NUM = 11;
+                TOTAL_NODE_NUM = 6;
                 
                 // 安全检查：确保 TOTAL_NODE_NUM 不超过数组大小
                 if (TOTAL_NODE_NUM > 100) {
@@ -2688,6 +2737,12 @@ DeliveryPriority Node::GetPriorityOfMessage(const u8* data, MessageLength size)
         if (header->messageType == MessageType::MODULE_TRIGGER_ACTION && size >= SIZEOF_CONN_PACKET_MODULE)
         {
             const ConnPacketModule* packet = (const ConnPacketModule*)data;
+            if (packet->moduleId == ModuleId::NODE
+                && packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_MEDIUM_CHUNK)
+            {
+                return DeliveryPriority::INVALID;
+            }
+
             if (packet->moduleId == ModuleId::NODE 
                 && packet->actionType == (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK)
             {
@@ -3179,26 +3234,26 @@ joinMeBufferPacket* Node::DetermineBestClusterAsMaster()
 //Connect to big clusters but big clusters must connect nodes that are not able 
 u32 Node::CalculateClusterScoreAsMaster(const joinMeBufferPacket& packet) const
 {
-    // switch (configuration.nodeId){
-    // case 1:
-    //     if (packet.payload.sender != 2) return 0;
-    //     break;
-    // case 2:
-    //      if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
-    //     break;
-    // case 3:
-    //      if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
-    //     break;  
-    // case 4:
-    //     if (1) return 0;
-    //     break;
-    // case 5:
-    //     if (1) return 0;
-    //     break;    
-    // default:
-    //     if (1) return 0;
-    //     break;
-    // }
+    switch (configuration.nodeId){
+    case 1:
+        if (packet.payload.sender != 2) return 0;
+        break;
+    case 2:
+         if (packet.payload.sender != 3 && packet.payload.sender != 4) return 0;
+        break;
+    case 3:
+         if (packet.payload.sender != 5 && packet.payload.sender != 6) return 0;
+        break;  
+    case 4:
+        if (1) return 0;
+        break;
+    case 5:
+        if (1) return 0;
+        break;    
+    default:
+        if (1) return 0;
+        break;
+    }
 
 
     //if(1) return 0;
@@ -4159,7 +4214,7 @@ void Node::TimerEventHandler(u16 passedTimeDs)
             SendModuleActionMessage(
                 MessageType::MODULE_TRIGGER_ACTION,
                 generateLoadTarget,
-                (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK,
+                generateLoadChunkActionType,
                 generateLoadRequestHandle,
                 payloadBuffer,
                 generateLoadPayloadSize,
@@ -4171,7 +4226,7 @@ void Node::TimerEventHandler(u16 passedTimeDs)
             SendModuleActionMessage(
                 MessageType::MODULE_TRIGGER_ACTION,
                 generateLoadTarget,
-                (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK,
+                generateLoadChunkActionType,
                 generateLoadRequestHandle,
                 payloadBuffer,
                 generateLoadPayloadSize,
@@ -5209,6 +5264,76 @@ TerminalCommandHandlerReturnType Node::TerminalCommandHandler(const char* comman
                 trace("Commands sent to %u nodes" EOL, TOTAL_NODE_NUM - 1);
                 trace("====================================" EOL);
                 
+                return TerminalCommandHandlerReturnType::SUCCESS;
+            }
+
+            //new command: let many nodes generate load on the default MEDIUM queue without priority marker
+            if (commandArgsSize > 6 && TERMARGS(3, "multi_generate_load_medium"))
+            {
+                //  0      1    2            3                 4      5            6                  7
+                //action this node multi_generate_load_medium size repeats timeBetweenMessages {requestHandle}
+                GenerateLoadMediumMessage gltm;
+                CheckedMemset(&gltm, 0, sizeof(GenerateLoadMediumMessage));
+                gltm.target = destinationNode;
+                gltm.size = Utility::StringToU8(commandArgs[4]);
+                gltm.amount = Utility::StringToU16(commandArgs[5]);
+                gltm.timeBetweenMessagesDs = Utility::StringToU8(commandArgs[6]);
+
+                if (gltm.size < 4) {
+                    trace("ERROR: multi_generate_load_medium requires payload size >= 4 for sequence number" EOL);
+                    return TerminalCommandHandlerReturnType::WRONG_ARGUMENT;
+                }
+
+                u8 requestHandle = commandArgsSize > 7 ? Utility::StringToU8(commandArgs[7]) : 1;
+                if (requestHandle == 0) requestHandle = 1;
+                gltm.requestHandle = requestHandle;
+
+                GS->MultipleUnit = requestHandle;
+                GS->sndCount = gltm.amount * (TOTAL_NODE_NUM - 1) * requestHandle;
+                GS->rcvCount = 0;
+
+                trace("=== multi_generate_load_medium Debug Info ===" EOL);
+                trace("TOTAL_NODE_NUM=%u, Sink=%u, Size=%u, Amount=%u, Interval=%u, Handle=%u" EOL,
+                    TOTAL_NODE_NUM, destinationNode, gltm.size, gltm.amount, gltm.timeBetweenMessagesDs, requestHandle);
+
+                for (int i = 0; i < TOTAL_NODE_NUM; i++)
+                {
+                    MultipleCount[i] = 0;
+                    CollsndCount[i] = 0;
+                    avgDelay[i] = 0;
+                    rcvCount[i] = 0;
+                    avgDelayHighPrio[i] = 0;
+                    avgDelayLowPrio[i] = 0;
+                    rcvCountHighPrio[i] = 0;
+                    rcvCountLowPrio[i] = 0;
+                    sndCountHighPrio[i] = 0;
+                    sndCountLowPrio[i] = 0;
+                    generateLoadReceivedPerSender[i] = 0;
+                    generateLoadSinkRecordingStarted[i] = false;
+                }
+
+                generateLoadExpectedPerSender = gltm.amount * requestHandle;
+
+                trace("Sending MEDIUM load commands to nodes: ");
+                for (int j = 1; j <= TOTAL_NODE_NUM; j++)
+                {
+                    if (j != destinationNode) {
+                        trace("%u ", j);
+                        SendModuleActionMessage(
+                            MessageType::MODULE_TRIGGER_ACTION,
+                            j,
+                            (u8)NodeModuleTriggerActionMessages::START_GENERATE_LOAD,
+                            0xFB,
+                            (u8*)&gltm,
+                            sizeof(gltm),
+                            false
+                        );
+                    }
+                }
+                trace(EOL);
+                trace("MEDIUM load commands sent to %u nodes" EOL, TOTAL_NODE_NUM - 1);
+                trace("============================================" EOL);
+
                 return TerminalCommandHandlerReturnType::SUCCESS;
             }
 

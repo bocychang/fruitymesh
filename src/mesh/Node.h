@@ -180,6 +180,7 @@ private:
             TRANSMIT_MIXED_LOW_COUNT = 27,
             TRANSMIT_MIXED_HIGH_ACTUAL = 28,  // 實際發送數（包含重傳）
             TRANSMIT_MIXED_LOW_ACTUAL = 29,   // 實際發送數（包含重傳）
+            GENERATE_LOAD_MEDIUM_CHUNK = 30,
         };
 
         enum class NodeModuleActionResponseMessages : u8
@@ -353,14 +354,21 @@ private:
             u8 requestHandle;     // 請求句柄（乘數），範圍 0-255
         };
         
-        // 新增：隨機比例模式結構（使用隨機數生成器按百分比分配 HIGH/LOW）
         struct GenerateLoadRandomRatioMessage{
             NodeId target;
             u8 size;
-            u16 totalAmount;         // 總封包數量
+            u16 totalAmount;
             u8 timeBetweenMessagesDs;
-            u8 highPercentage;       // HIGH priority 百分比 (0-100)
-            u8 requestHandle;        // 請求句柄（乘數），範圍 0-255
+            u8 highPercentage;
+            u8 requestHandle;
+        };
+
+        struct GenerateLoadMediumMessage{
+            NodeId target;
+            u8 size;
+            u16 amount;
+            u8 timeBetweenMessagesDs;
+            u8 requestHandle;
         };
 #pragma pack(pop)
         //State for straggered connection interval updates
@@ -389,10 +397,10 @@ private:
         bool generateLoadRandomRatioMode = false; // 是否為隨機比例模式
         u8 generateLoadRandomHighPercentage = 75; // HIGH priority 百分比 (0-100)
         
-        // 新增：50%資料過濾變數（只記錄後50%）
-        u32 generateLoadTotalMessages = 0;       // 總訊息數量
-        u32 generateLoadSentCount = 0;           // 已發送訊息計數
-        bool generateLoadRecordingStarted = false; // 是否已開始記錄（達到50%後）
+        u32 generateLoadTotalMessages = 0;
+        u32 generateLoadSentCount = 0;
+        bool generateLoadRecordingStarted = false;
+        u8 generateLoadChunkActionType = (u8)NodeModuleTriggerActionMessages::GENERATE_LOAD_CHUNK;
         
         constexpr static u8 generateLoadMagicNumber = 0x91;
         constexpr static u8 generateLoadPriorityMarker = 0xF0; // 标记 priority 包
